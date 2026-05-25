@@ -103,7 +103,6 @@ public sealed class MonitoringService : IDisposable
         _cts.Cancel();
         _timer.Dispose();
         _cts.Dispose();
-        _processMonitor.Dispose();
         _computer.Close();
     }
 }
