@@ -10,7 +10,6 @@ namespace PowerMonitor.UI.ViewModels;
 public partial class MainViewModel : ObservableObject
 {
     private readonly MonitoringService _service;
-    private readonly int _historyLength = 60;
     private readonly DateTime _startTime = DateTime.Now;
 
     // CPU
@@ -28,9 +27,10 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private double _systemTotalPower;
     [ObservableProperty] private string _systemTotalText = "0.0";
 
-    // Chart history
-    [ObservableProperty] private double[] _cpuPowerHistory;
-    [ObservableProperty] private double[] _systemPowerHistory;
+    // Chart history (capped at ~2 minutes of data at 1 sample/sec)
+    private const int MaxHistoryLength = 120;
+    [ObservableProperty] private List<double> _cpuPowerHistory = new();
+    [ObservableProperty] private List<double> _systemPowerHistory = new();
     [ObservableProperty] private double _cpuHistoryMax = 100;
 
     // Processes
@@ -47,9 +47,6 @@ public partial class MainViewModel : ObservableObject
     public MainViewModel(MonitoringService service)
     {
         _service = service;
-        _cpuPowerHistory = new double[_historyLength];
-        _systemPowerHistory = new double[_historyLength];
-
         service.DataUpdated += OnDataUpdated;
     }
 
@@ -89,8 +86,10 @@ public partial class MainViewModel : ObservableObject
             SystemTotalText = p.SystemTotalPowerWatts.ToString("F1");
 
             // History
-            PushHistory(CpuPowerHistory, p.CpuPackagePowerWatts);
-            PushHistory(SystemPowerHistory, p.SystemTotalPowerWatts);
+            CpuPowerHistory.Add(p.CpuPackagePowerWatts);
+            if (CpuPowerHistory.Count > MaxHistoryLength) CpuPowerHistory.RemoveAt(0);
+            SystemPowerHistory.Add(p.SystemTotalPowerWatts);
+            if (SystemPowerHistory.Count > MaxHistoryLength) SystemPowerHistory.RemoveAt(0);
             CpuHistoryMax = Math.Max(50, CpuPowerHistory.Max() * 1.3);
 
             // Processes
@@ -106,12 +105,6 @@ public partial class MainViewModel : ObservableObject
 
             GraphVersion++;
         });
-    }
-
-    private static void PushHistory(double[] buffer, double value)
-    {
-        Array.Copy(buffer, 1, buffer, 0, buffer.Length - 1);
-        buffer[^1] = value;
     }
 
     [RelayCommand]

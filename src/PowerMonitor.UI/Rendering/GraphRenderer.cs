@@ -13,18 +13,21 @@ public static class GraphRenderer
     /// </summary>
     public static void DrawRollingLine(
         DrawingContext dc,
-        double[] data,
+        IList<double> data,
         Rect bounds,
         Color lineColor,
         double maxValue,
         double lineThickness = 1.5)
     {
-        if (data.Length < 2 || bounds.Width <= 0 || bounds.Height <= 0) return;
+        int count = data.Count;
+        if (count < 2 || bounds.Width <= 0 || bounds.Height <= 0) return;
 
         // 自动计算最大值
         if (maxValue <= 0)
         {
-            maxValue = data.Max();
+            maxValue = 0;
+            for (int i = 0; i < count; i++)
+                if (data[i] > maxValue) maxValue = data[i];
             if (maxValue <= 0) maxValue = 1;
             maxValue *= 1.2; // 留20%余量
         }
@@ -43,34 +46,42 @@ public static class GraphRenderer
         // 绘制网格线
         DrawGridLines(dc, bounds, maxValue);
 
-        // 构建折线几何体
-        var geometry = new StreamGeometry();
-        using (var ctx = geometry.Open())
+        // 构建折线数据点
+        double xStep = bounds.Width / (count - 1);
+        var points = new Point[count];
+        double x = bounds.X;
+        for (int i = 0; i < count; i++)
         {
-            double xStep = bounds.Width / (data.Length - 1);
-            double x = bounds.X;
-
-            // 起点
-            double y0 = bounds.Bottom - (data[0] / maxValue * bounds.Height);
-            y0 = Math.Max(bounds.Top, Math.Min(bounds.Bottom, y0));
-            ctx.BeginFigure(new Point(x, y0), false, false);
-
-            // 折线点
-            for (int i = 1; i < data.Length; i++)
-            {
-                x += xStep;
-                double y = bounds.Bottom - (data[i] / maxValue * bounds.Height);
-                y = Math.Max(bounds.Top, Math.Min(bounds.Bottom, y));
-                ctx.LineTo(new Point(x, y), true, false);
-            }
-
-            // 闭合填充区域
-            ctx.LineTo(new Point(bounds.Right, bounds.Bottom), true, false);
-            ctx.LineTo(new Point(bounds.X, bounds.Bottom), true, false);
+            double y = bounds.Bottom - (data[i] / maxValue * bounds.Height);
+            y = Math.Max(bounds.Top, Math.Min(bounds.Bottom, y));
+            points[i] = new Point(x, y);
+            x += xStep;
         }
-        geometry.Freeze();
 
-        dc.DrawGeometry(fillGradient, linePen, geometry);
+        // 填充几何体（闭合到底部）
+        var fillGeometry = new StreamGeometry();
+        using (var ctx = fillGeometry.Open())
+        {
+            ctx.BeginFigure(new Point(points[0].X, bounds.Bottom), true, true);
+            ctx.LineTo(points[0], true, false);
+            for (int i = 1; i < count; i++)
+                ctx.LineTo(points[i], true, false);
+            ctx.LineTo(new Point(points[count - 1].X, bounds.Bottom), true, false);
+        }
+        fillGeometry.Freeze();
+
+        // 线条几何体（仅数据点，不闭合）
+        var lineGeometry = new StreamGeometry();
+        using (var ctx = lineGeometry.Open())
+        {
+            ctx.BeginFigure(points[0], true, false);
+            for (int i = 1; i < count; i++)
+                ctx.LineTo(points[i], true, false);
+        }
+        lineGeometry.Freeze();
+
+        dc.DrawGeometry(fillGradient, null, fillGeometry);
+        dc.DrawGeometry(null, linePen, lineGeometry);
     }
 
     /// <summary>

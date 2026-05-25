@@ -6,10 +6,9 @@
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
-        Topmost="True"
         ShowInTaskbar="True"
-        ResizeMode="NoResize"
-        Width="320" Height="580"
+        ResizeMode="CanResizeWithGrip"
+        Width="320" Height="580" MinWidth="280" MinHeight="300"
         MouseLeftButtonDown="OnMouseLeftButtonDown"
         Loaded="OnLoaded">
 
@@ -21,13 +20,16 @@
             <DropShadowEffect Color="#000000" BlurRadius="20" ShadowDepth="0" Opacity="0.6" />
         </Border.Effect>
 
+        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled"
+                      Padding="0">
         <Grid Margin="1">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
-                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
@@ -222,5 +224,6 @@
                 </DockPanel>
             </Border>
         </Grid>
+        </ScrollViewer>
     </Border>
 </Window>
