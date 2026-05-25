@@ -12,31 +12,43 @@ public partial class App : Application
 {
     private MonitoringService? _monitoringService;
     private TrayIconService? _trayIcon;
-    private MainViewModel? _viewModel;
 
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
-        // 创建监控服务 (CPU TDP 125W, GPU TDP 250W)
-        _monitoringService = new MonitoringService(cpuTdp: 125, gpuTdp: 250);
+        try
+        {
+            // 创建监控服务 (CPU TDP 125W, GPU TDP 250W)
+            _monitoringService = new MonitoringService(cpuTdp: 125, gpuTdp: 250);
 
-        // 创建ViewModel
-        _viewModel = new MainViewModel(_monitoringService);
+            // 创建ViewModel
+            var viewModel = new MainViewModel(_monitoringService);
 
-        // 设置主窗口
-        var mainWindow = new MainWindow();
-        mainWindow.SetViewModel(_viewModel);
+            // 设置主窗口
+            var mainWindow = new MainWindow();
+            mainWindow.SetViewModel(viewModel);
+            MainWindow = mainWindow;
 
-        // 初始化系统托盘
-        _trayIcon = new TrayIconService();
-        _trayIcon.Initialize(mainWindow, () => _viewModel.ToggleLockCommand.Execute(null));
+            // 初始化系统托盘
+            _trayIcon = new TrayIconService();
+            _trayIcon.Initialize(mainWindow, () => viewModel.ToggleLockCommand.Execute(null));
 
-        // 启动监控
-        _monitoringService.Start();
+            // 启动监控
+            _monitoringService.Start();
 
-        // 显示主窗口
-        mainWindow.Show();
+            // 显示主窗口
+            mainWindow.Show();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                $"启动失败: {ex.Message}\n\n{ex.StackTrace}",
+                "Power Monitor Error",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            Shutdown();
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)

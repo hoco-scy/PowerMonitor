@@ -46,7 +46,7 @@
                     <Button Style="{StaticResource IconButton}"
                             Click="OnLockClick"
                             ToolTip="锁定/解锁位置">
-                        <Path Stroke="{Binding IsLocked, Converter={StaticResource LockColorConverter}}"
+                        <Path x:Name="LockIcon" Stroke="#FF484F58"
                               StrokeThickness="1.5" Width="12" Height="12"
                               Data="{StaticResource LockIconData}" />
                     </Button>

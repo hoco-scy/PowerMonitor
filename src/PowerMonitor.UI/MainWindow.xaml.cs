@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using PowerMonitor.UI.ViewModels;
 
 namespace PowerMonitor.UI;
@@ -20,6 +21,25 @@ public partial class MainWindow : Window
     {
         _viewModel = viewModel;
         DataContext = viewModel;
+
+        // 监听锁定状态变化
+        viewModel.PropertyChanged += (s, e) =>
+        {
+            if (e.PropertyName == nameof(MainViewModel.IsLocked))
+            {
+                UpdateLockIcon();
+            }
+        };
+    }
+
+    private void UpdateLockIcon()
+    {
+        if (LockIcon != null)
+        {
+            LockIcon.Stroke = _viewModel?.IsLocked == true
+                ? new SolidColorBrush(Color.FromRgb(0, 212, 170))   // 青绿色
+                : new SolidColorBrush(Color.FromRgb(0x48, 0x4F, 0x58)); // 灰色
+        }
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -51,10 +71,5 @@ public partial class MainWindow : Window
     private void OnCloseClick(object sender, RoutedEventArgs e)
     {
         Hide();
-    }
-
-    protected override void OnClosed(EventArgs e)
-    {
-        base.OnClosed(e);
     }
 }
