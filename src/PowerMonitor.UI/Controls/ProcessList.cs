@@ -6,10 +6,7 @@ using PowerMonitor.Core.Models;
 
 namespace PowerMonitor.UI.Controls;
 
-/// <summary>
-/// 进程功耗排行列表控件
-/// </summary>
-public class ProcessList : Control
+public class ProcessList : StackPanel
 {
     public static readonly DependencyProperty ProcessesProperty =
         DependencyProperty.Register(nameof(Processes), typeof(ProcessPowerData[]), typeof(ProcessList),
@@ -21,41 +18,43 @@ public class ProcessList : Control
         set => SetValue(ProcessesProperty, value);
     }
 
-    private StackPanel? _container;
-
-    public override void OnApplyTemplate()
-    {
-        base.OnApplyTemplate();
-        _container = GetTemplateChild("PART_Container") as StackPanel;
-        Rebuild();
-    }
-
     private void Rebuild()
     {
-        if (_container is null) return;
-        _container.Children.Clear();
+        Children.Clear();
 
         var processes = Processes;
-        if (processes is null || processes.Length == 0) return;
+        Console.WriteLine($"[ProcessList] Rebuild called, processes={processes?.Length ?? -1}");
+
+        if (processes is null || processes.Length == 0)
+        {
+            Children.Add(new TextBlock
+            {
+                Text = "no data",
+                Foreground = Brushes.Gray,
+                FontFamily = new FontFamily("Consolas"),
+                FontSize = 11
+            });
+            return;
+        }
 
         double maxPower = processes.Max(p => p.EstimatedPowerWatts);
         if (maxPower <= 0) maxPower = 1;
 
         foreach (var proc in processes)
         {
-            var row = CreateProcessRow(proc, maxPower);
-            _container.Children.Add(row);
+            Children.Add(CreateProcessRow(proc, maxPower));
         }
+
+        Console.WriteLine($"[ProcessList] Added {processes.Length} rows");
     }
 
-    private FrameworkElement CreateProcessRow(ProcessPowerData proc, double maxPower)
+    private static FrameworkElement CreateProcessRow(ProcessPowerData proc, double maxPower)
     {
         var grid = new Grid { Margin = new Thickness(0, 2, 0, 2) };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(50) });
 
-        // 进程名
         var nameBlock = new TextBlock
         {
             Text = proc.ProcessName.Length > 14 ? proc.ProcessName[..14] : proc.ProcessName,
@@ -67,7 +66,6 @@ public class ProcessList : Control
         };
         Grid.SetColumn(nameBlock, 0);
 
-        // 功耗条
         var barContainer = new Grid
         {
             Width = 50,
@@ -98,7 +96,6 @@ public class ProcessList : Control
         barContainer.Children.Add(barFill);
         Grid.SetColumn(barContainer, 1);
 
-        // 功耗值
         var powerBlock = new TextBlock
         {
             Text = $"{proc.EstimatedPowerWatts:F1}W",

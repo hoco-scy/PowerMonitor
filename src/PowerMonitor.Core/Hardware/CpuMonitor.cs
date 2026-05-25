@@ -3,9 +3,6 @@ using PowerMonitor.Core.Models;
 
 namespace PowerMonitor.Core.Hardware;
 
-/// <summary>
-/// CPU传感器监控，读取功耗/使用率/温度
-/// </summary>
 public sealed class CpuMonitor
 {
     private readonly Computer _computer;
@@ -17,22 +14,17 @@ public sealed class CpuMonitor
         _cpuTdp = cpuTdp;
     }
 
-    /// <summary>
-    /// 读取CPU传感器数据
-    /// </summary>
     public CpuReading ReadSensors()
     {
         var cpuHardware = _computer.Hardware
             .FirstOrDefault(h => h.HardwareType == HardwareType.Cpu);
 
         if (cpuHardware is null)
-            return new CpuReading(0, 0, 0, 0, Array.Empty<double>());
+            return new CpuReading(0, 0, 0, 0, 0, Array.Empty<double>());
 
         cpuHardware.Update();
 
-        double packagePower = 0;
-        double corePower = 0;
-        double totalLoad = 0;
+        double packagePower = 0, corePower = 0, totalLoad = 0, temperature = 0;
         var perCoreLoad = new List<double>();
 
         foreach (var sensor in cpuHardware.Sensors)
@@ -55,10 +47,23 @@ public sealed class CpuMonitor
                              sensor.Name.Contains("#", StringComparison.OrdinalIgnoreCase))
                         perCoreLoad.Add(sensor.Value ?? 0);
                     break;
+
+                case SensorType.Temperature:
+                    var tv = sensor.Value ?? 0;
+                    if (tv > 0 && tv <= 150)
+                    {
+                        if (sensor.Name.Contains("Package", StringComparison.OrdinalIgnoreCase) ||
+                            sensor.Name.Contains("Core", StringComparison.OrdinalIgnoreCase) ||
+                            sensor.Name.Contains("CPU", StringComparison.OrdinalIgnoreCase))
+                        {
+                            temperature = Math.Max(temperature, tv);
+                        }
+                    }
+                    break;
             }
         }
 
-        // 子硬件传感器 (有些CPU把传感器放在子硬件里)
+        // Sub-hardware sensors (some CPUs put sensors in sub-hardware)
         foreach (var sub in cpuHardware.SubHardware)
         {
             sub.Update();
@@ -69,10 +74,16 @@ public sealed class CpuMonitor
                 {
                     packagePower = sensor.Value ?? 0;
                 }
+                if (sensor.SensorType == SensorType.Temperature)
+                {
+                    var tv = sensor.Value ?? 0;
+                    if (tv > 0 && tv <= 150 && tv > temperature)
+                        temperature = tv;
+                }
             }
         }
 
-        // 如果没有读到功耗，用TDP降级估算
+        // Fallback: estimate power from load × TDP
         if (packagePower <= 0 && totalLoad > 0)
         {
             packagePower = (totalLoad / 100.0) * _cpuTdp;
@@ -82,19 +93,18 @@ public sealed class CpuMonitor
             PackagePowerWatts: packagePower,
             CorePowerWatts: corePower > 0 ? corePower : packagePower,
             UsagePercent: totalLoad,
+            TemperatureC: temperature,
             CoreCount: perCoreLoad.Count > 0 ? perCoreLoad.Count : Environment.ProcessorCount,
             PerCoreUsagePercent: perCoreLoad.ToArray()
         );
     }
 }
 
-/// <summary>
-/// CPU读数快照
-/// </summary>
 public record CpuReading(
     double PackagePowerWatts,
     double CorePowerWatts,
     double UsagePercent,
+    double TemperatureC,
     int CoreCount,
     double[] PerCoreUsagePercent
 );

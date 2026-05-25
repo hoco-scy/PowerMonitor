@@ -8,15 +8,12 @@ public record PowerData(
     double CpuPackagePowerWatts,
     double CpuCorePowerWatts,
     double CpuUsagePercent,
+    double CpuTemperatureC,
     int CpuCoreCount,
     double[] CpuPerCoreUsagePercent,
 
-    // GPU
-    double GpuPowerWatts,
-    double GpuUsagePercent,
-    double GpuTemperatureC,
-    double GpuMemoryUsedMb,
-    double GpuMemoryTotalMb,
+    // GPU (all GPUs detected)
+    GpuReading[] GpuReadings,
 
     // 系统总功耗 (CPU + GPU + 基线估算)
     double SystemTotalPowerWatts,

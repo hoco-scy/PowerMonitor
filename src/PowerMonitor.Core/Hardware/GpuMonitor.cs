@@ -3,40 +3,40 @@ using PowerMonitor.Core.Models;
 
 namespace PowerMonitor.Core.Hardware;
 
-/// <summary>
-/// GPU传感器监控，支持NVIDIA/AMD，读取功耗/使用率/温度/显存
-/// </summary>
 public sealed class GpuMonitor
 {
     private readonly Computer _computer;
-    private readonly double _gpuTdp;
 
-    public GpuMonitor(Computer computer, double gpuTdp)
+    public GpuMonitor(Computer computer)
     {
         _computer = computer;
-        _gpuTdp = gpuTdp;
     }
 
-    /// <summary>
-    /// 读取GPU传感器数据
-    /// </summary>
-    public GpuReading ReadSensors()
+    public GpuReading[] ReadSensors()
     {
-        var gpuHardware = _computer.Hardware
-            .FirstOrDefault(h => h.HardwareType == HardwareType.GpuNvidia ||
-                                 h.HardwareType == HardwareType.GpuAmd ||
-                                 h.HardwareType == HardwareType.GpuIntel);
+        var gpus = _computer.Hardware
+            .Where(h => h.HardwareType == HardwareType.GpuNvidia ||
+                        h.HardwareType == HardwareType.GpuAmd ||
+                        h.HardwareType == HardwareType.GpuIntel)
+            .ToArray();
 
-        if (gpuHardware is null)
-            return new GpuReading(0, 0, 0, 0, 0);
+        if (gpus.Length == 0)
+            return Array.Empty<GpuReading>();
 
+        var readings = new GpuReading[gpus.Length];
+        for (int i = 0; i < gpus.Length; i++)
+        {
+            readings[i] = ReadGpu(gpus[i]);
+        }
+        return readings;
+    }
+
+    private static GpuReading ReadGpu(IHardware gpuHardware)
+    {
         gpuHardware.Update();
 
-        double power = 0;
-        double load = 0;
-        double temp = 0;
-        double memUsed = 0;
-        double memTotal = 0;
+        double power = 0, load = 0, temp = 0, memUsed = 0, memTotal = 0;
+        double coreTemp = -1, hotSpotTemp = -1;
 
         foreach (var sensor in gpuHardware.Sensors)
         {
@@ -47,7 +47,9 @@ public sealed class GpuMonitor
                         sensor.Name.Contains("Power", StringComparison.OrdinalIgnoreCase) ||
                         sensor.Name.Contains("Total", StringComparison.OrdinalIgnoreCase))
                     {
-                        power = Math.Max(power, sensor.Value ?? 0);
+                        var v = sensor.Value ?? 0;
+                        if (v > 0 && (power == 0 || v > power))
+                            power = v;
                     }
                     break;
 
@@ -61,12 +63,16 @@ public sealed class GpuMonitor
                     break;
 
                 case SensorType.Temperature:
-                    if (sensor.Name.Contains("Core", StringComparison.OrdinalIgnoreCase) ||
-                        sensor.Name.Contains("GPU", StringComparison.OrdinalIgnoreCase) ||
-                        sensor.Name.Contains("Hot", StringComparison.OrdinalIgnoreCase))
-                    {
-                        temp = Math.Max(temp, sensor.Value ?? 0);
-                    }
+                    var tv = sensor.Value ?? 0;
+                    // Clamp invalid values (> 150°C is unreasonable for any GPU)
+                    if (tv <= 0 || tv > 150) break;
+
+                    if (sensor.Name.Contains("Core", StringComparison.OrdinalIgnoreCase))
+                        coreTemp = Math.Max(coreTemp, tv);
+                    else if (sensor.Name.Contains("Hot", StringComparison.OrdinalIgnoreCase))
+                        hotSpotTemp = Math.Max(hotSpotTemp, tv);
+                    else if (sensor.Name.Contains("GPU", StringComparison.OrdinalIgnoreCase))
+                        temp = Math.Max(temp, tv);
                     break;
 
                 case SensorType.SmallData:
@@ -84,26 +90,34 @@ public sealed class GpuMonitor
             }
         }
 
-        // 子硬件传感器
         foreach (var sub in gpuHardware.SubHardware)
         {
             sub.Update();
             foreach (var sensor in sub.Sensors)
             {
-                if (sensor.SensorType == SensorType.Power && sensor.Value > power)
-                    power = sensor.Value ?? 0;
-                if (sensor.SensorType == SensorType.Temperature && sensor.Value > temp)
-                    temp = sensor.Value ?? 0;
+                if (sensor.SensorType == SensorType.Power)
+                {
+                    var v = sensor.Value ?? 0;
+                    if (v > 0 && v > power) power = v;
+                }
+                if (sensor.SensorType == SensorType.Temperature)
+                {
+                    var v = sensor.Value ?? 0;
+                    if (v > 0 && v <= 150 && v > temp) temp = v;
+                }
             }
         }
 
-        // TDP降级估算
-        if (power <= 0 && load > 0)
-        {
-            power = (load / 100.0) * _gpuTdp;
-        }
+        // Pick best temperature: prefer Core, then HotSpot, then any valid
+        if (coreTemp > 0) temp = coreTemp;
+        else if (hotSpotTemp > 0) temp = hotSpotTemp;
+
+        bool isIntegrated = IsIntegratedGpu(gpuHardware);
 
         return new GpuReading(
+            Name: gpuHardware.Name,
+            Label: isIntegrated ? "iGPU" : "dGPU",
+            IsIntegrated: isIntegrated,
             PowerWatts: power,
             UsagePercent: load,
             TemperatureC: temp,
@@ -111,15 +125,27 @@ public sealed class GpuMonitor
             MemoryTotalMb: memTotal
         );
     }
-}
 
-/// <summary>
-/// GPU读数快照
-/// </summary>
-public record GpuReading(
-    double PowerWatts,
-    double UsagePercent,
-    double TemperatureC,
-    double MemoryUsedMb,
-    double MemoryTotalMb
-);
+    private static bool IsIntegratedGpu(IHardware gpu)
+    {
+        var type = gpu.HardwareType;
+        var name = gpu.Name;
+
+        if (type == HardwareType.GpuNvidia)
+            return false;
+
+        if (type == HardwareType.GpuIntel)
+            return !name.Contains("Arc", StringComparison.OrdinalIgnoreCase);
+
+        if (type == HardwareType.GpuAmd)
+        {
+            if (name.Contains("RX", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Pro", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("W", StringComparison.OrdinalIgnoreCase))
+                return false;
+            return true;
+        }
+
+        return false;
+    }
+}

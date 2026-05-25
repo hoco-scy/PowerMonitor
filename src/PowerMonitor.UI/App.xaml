@@ -9,8 +9,9 @@
                 <ResourceDictionary Source="Themes/DarkTheme.xaml" />
             </ResourceDictionary.MergedDictionaries>
 
-            <!-- Bool转Visibility -->
-            <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+            <!-- Bool转Visibility (supports ConverterParameter=Invert) -->
+            <converters:BoolToVisibilityConverter x:Key="BoolToVisibility"
+                                                  xmlns:converters="clr-namespace:PowerMonitor.UI.Converters" />
 
             <!-- 锁图标数据 -->
             <Geometry x:Key="LockIconData">M4,0 C4,-1.5 8,-2 8,-2 C8,-2 12,-1.5 12,0 L12,4 L4,4 Z M2,4 L14,4 L14,12 L2,12 Z M6,7 L6,9 L10,9 L10,7 Z</Geometry>

@@ -1,175 +1,193 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using PowerMonitor.Core.Models;
 
 namespace PowerMonitor.Core.Process;
 
-/// <summary>
-/// 进程功耗监控
-/// 通过TotalProcessorTime差值估算各进程CPU占用和功耗
-/// </summary>
-public sealed class ProcessMonitor
+public sealed class ProcessMonitor : IDisposable
 {
     private readonly double _cpuTdp;
-    private readonly double _gpuTdp;
     private readonly int _coreCount;
+    private readonly int _pollingIntervalMs;
+    private readonly bool _enabled;
 
-    // 上一次采样: PID -> (CPU累计时间, 采样时刻, 进程名, 工作集)
-    private readonly ConcurrentDictionary<int, SampleData> _prev = new();
+    private Thread? _workerThread;
+    private readonly CancellationTokenSource _cts = new();
 
-    // 上次全量扫描时间
-    private DateTime _lastFullScan = DateTime.MinValue;
-    private static readonly TimeSpan FullScanInterval = TimeSpan.FromSeconds(5);
+    private volatile ProcessPowerData[] _latestResults = Array.Empty<ProcessPowerData>();
+    private volatile bool _firstSampleComplete;
 
-    // 已知的值得关注的PID (工作集>10MB)
-    private readonly HashSet<int> _watchedPids = new();
+    public bool IsFirstSampleComplete => _firstSampleComplete;
+    public ProcessPowerData[] LatestResults => _latestResults;
+    public string DiagnosticText { get; private set; } = "idle";
 
-    // 缓存结果
-    private ProcessPowerData[] _cache = Array.Empty<ProcessPowerData>();
-
-    public ProcessMonitor(double cpuTdp, double gpuTdp)
+    public ProcessMonitor(double cpuTdp, bool enabled = true, int pollingIntervalMs = 5000)
     {
         _cpuTdp = cpuTdp;
-        _gpuTdp = gpuTdp;
         _coreCount = Environment.ProcessorCount;
+        _pollingIntervalMs = pollingIntervalMs;
+        _enabled = enabled;
     }
 
-    /// <summary>
-    /// 获取Top N进程的功耗估算
-    /// </summary>
-    public ProcessPowerData[] GetTopProcesses(int count)
+    public void Start()
     {
-        var now = DateTime.UtcNow;
-        bool fullScan = (now - _lastFullScan) >= FullScanInterval;
+        if (!_enabled) return;
 
-        if (fullScan)
+        _workerThread = new Thread(WorkerLoop)
         {
-            _lastFullScan = now;
-            _watchedPids.Clear();
+            Name = "ProcessMonitor",
+            Priority = ThreadPriority.Lowest,
+            IsBackground = true
+        };
+        _workerThread.Start();
+    }
+
+    private void WorkerLoop()
+    {
+        var token = _cts.Token;
+        bool isFirst = true;
+
+        while (!token.IsCancellationRequested)
+        {
+            try
+            {
+                if (isFirst)
+                {
+                    Console.WriteLine("[ProcessMonitor] First sample (baseline)...");
+                    var baseline = SampleAll(token);
+                    if (token.IsCancellationRequested) break;
+                    Console.WriteLine($"[ProcessMonitor] Baseline: {baseline.Count} processes");
+
+                    Thread.Sleep(2000);
+                    if (token.IsCancellationRequested) break;
+
+                    Console.WriteLine("[ProcessMonitor] Second sample (current)...");
+                    var current = SampleAll(token);
+                    if (token.IsCancellationRequested) break;
+                    Console.WriteLine($"[ProcessMonitor] Current: {current.Count} processes");
+
+                    var top = ComputeTop(current, baseline, out var diag);
+                    _latestResults = top;
+                    _prevSample = current;
+                    _firstSampleComplete = true;
+                    isFirst = false;
+                    Console.WriteLine($"[ProcessMonitor] First result: {top.Length} shown | {diag}");
+                    DiagnosticText = $"done: {top.Length} shown | {diag}";
+                }
+                else
+                {
+                    Thread.Sleep(_pollingIntervalMs);
+                    if (token.IsCancellationRequested) break;
+
+                    var current = SampleAll(token);
+                    if (token.IsCancellationRequested) break;
+
+                    _latestResults = ComputeTop(current, _prevSample, out var d);
+                    Console.WriteLine($"[ProcessMonitor] Poll: {_latestResults.Length} shown | {d}");
+                    DiagnosticText = $"done: {_latestResults.Length} shown | {d}";
+                    _prevSample = current;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ProcessMonitor] Error: {ex.GetType().Name}: {ex.Message}");
+                Thread.Sleep(1000);
+            }
         }
+    }
+
+    private Dictionary<int, ProcessSample> _prevSample = new();
+
+    private static Dictionary<int, ProcessSample> SampleAll(CancellationToken token)
+    {
+        var samples = new Dictionary<int, ProcessSample>();
+        var processes = System.Diagnostics.Process.GetProcesses();
+        var sampleTime = DateTime.UtcNow;
 
         try
         {
-            // 获取要采样的进程列表
-            System.Diagnostics.Process[] processes;
-            if (fullScan)
-            {
-                // 全量扫描：获取所有进程
-                processes = System.Diagnostics.Process.GetProcesses();
-            }
-            else
-            {
-                // 增量扫描：只看已跟踪的PID
-                processes = GetWatchedProcesses();
-            }
-
-            var results = new List<ProcessPowerData>();
-
             foreach (var proc in processes)
             {
+                token.ThrowIfCancellationRequested();
                 try
                 {
                     int pid = proc.Id;
                     if (pid == 0 || pid == 4) continue;
 
-                    // 读取CPU累计时间和工作集
                     var cpuTime = proc.TotalProcessorTime;
                     long ws = proc.WorkingSet64;
-                    string name = proc.ProcessName;
 
-                    // 全量扫描时筛选：只关注工作集>10MB的进程
-                    if (fullScan)
+                    if (ws >= 10L * 1024 * 1024)
                     {
-                        if (ws > 10 * 1024 * 1024)
-                        {
-                            _watchedPids.Add(pid);
-                        }
-                        else
-                        {
-                            // 记录采样但不加入watch列表
-                            _prev[pid] = new SampleData(cpuTime, now, name, ws);
-                            continue;
-                        }
+                        samples[pid] = new ProcessSample(cpuTime, ws, proc.ProcessName, sampleTime);
                     }
-
-                    // 与上次采样比较
-                    if (_prev.TryGetValue(pid, out var prev))
-                    {
-                        var cpuDelta = cpuTime - prev.CpuTime;
-                        var wallDelta = now - prev.Timestamp;
-
-                        if (wallDelta.TotalSeconds > 0.5 && cpuDelta.TotalSeconds >= 0)
-                        {
-                            double cpuFrac = cpuDelta.TotalSeconds / (wallDelta.TotalSeconds * _coreCount);
-                            double power = Math.Min(cpuFrac * _cpuTdp, _cpuTdp);
-
-                            if (power >= 0.05) // 过滤噪声
-                            {
-                                results.Add(new ProcessPowerData(
-                                    ProcessId: pid,
-                                    ProcessName: name,
-                                    CpuUsagePercent: Math.Min(cpuFrac * 100, 100 * _coreCount),
-                                    EstimatedPowerWatts: power,
-                                    WorkingSetBytes: ws
-                                ));
-                            }
-                        }
-                    }
-
-                    _prev[pid] = new SampleData(cpuTime, now, name, ws);
                 }
                 catch
                 {
-                    // 无权限或进程已退出
+                    // Process may have exited or we lack permission — skip
                 }
             }
-
-            // 清理已退出的进程
-            if (fullScan)
-            {
-                var currentPids = new HashSet<int>(processes.Select(p => p.Id));
-                foreach (var pid in _prev.Keys)
-                {
-                    if (!currentPids.Contains(pid))
-                    {
-                        _prev.TryRemove(pid, out _);
-                        _watchedPids.Remove(pid);
-                    }
-                }
-            }
-
-            // 释放进程对象
+        }
+        finally
+        {
             foreach (var p in processes) p.Dispose();
-
-            _cache = results
-                .OrderByDescending(p => p.EstimatedPowerWatts)
-                .Take(count)
-                .ToArray();
-        }
-        catch
-        {
-            // 失败时返回缓存
         }
 
-        return _cache;
+        return samples;
     }
 
-    private System.Diagnostics.Process[] GetWatchedProcesses()
+    private ProcessPowerData[] ComputeTop(
+        Dictionary<int, ProcessSample> current,
+        Dictionary<int, ProcessSample> previous,
+        out string diagnostic)
     {
-        var list = new List<System.Diagnostics.Process>(_watchedPids.Count);
-        foreach (var pid in _watchedPids)
+        var results = new List<ProcessPowerData>(current.Count);
+        int matched = 0, badWall = 0, badCpu = 0, belowThreshold = 0;
+
+        foreach (var (pid, cur) in current)
         {
-            try
-            {
-                list.Add(System.Diagnostics.Process.GetProcessById(pid));
-            }
-            catch
-            {
-                // PID已不存在
-            }
+            if (!previous.TryGetValue(pid, out var prv)) continue;
+            matched++;
+
+            double wallDelta = (cur.Timestamp - prv.Timestamp).TotalSeconds;
+            double cpuDelta = cur.CpuTime.TotalSeconds - prv.CpuTime.TotalSeconds;
+
+            if (wallDelta <= 0.5) { badWall++; continue; }
+            if (cpuDelta < 0) { badCpu++; continue; }
+
+            double cpuFrac = cpuDelta / (wallDelta * _coreCount);
+            double power = Math.Min(cpuFrac * _cpuTdp, _cpuTdp);
+
+            if (power < 0.05) { belowThreshold++; continue; }
+
+            results.Add(new ProcessPowerData(
+                ProcessId: pid,
+                ProcessName: cur.Name,
+                CpuUsagePercent: Math.Min(cpuFrac * 100, 100 * _coreCount),
+                EstimatedPowerWatts: power,
+                WorkingSetBytes: cur.WorkingSet
+            ));
         }
-        return list.ToArray();
+
+        results.Sort((a, b) => b.EstimatedPowerWatts.CompareTo(a.EstimatedPowerWatts));
+        diagnostic = $"matched={matched} badWall={badWall} badCpu={badCpu} belowThr={belowThreshold} shown={results.Count}";
+        return results.Take(8).ToArray();
     }
 
-    private record struct SampleData(TimeSpan CpuTime, DateTime Timestamp, string Name, long WorkingSet);
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _workerThread?.Join(TimeSpan.FromSeconds(3));
+        _cts.Dispose();
+    }
+
+    private readonly record struct ProcessSample(
+        TimeSpan CpuTime,
+        long WorkingSet,
+        string Name,
+        DateTime Timestamp
+    );
 }

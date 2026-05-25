@@ -1,16 +1,14 @@
+using System.Collections;
 using System.Windows;
 using System.Windows.Media;
 using PowerMonitor.UI.Rendering;
 
 namespace PowerMonitor.UI.Controls;
 
-/// <summary>
-/// 迷你滚动折线图控件
-/// </summary>
 public class MiniGraph : FrameworkElement
 {
     public static readonly DependencyProperty HistoryProperty =
-        DependencyProperty.Register(nameof(History), typeof(double[]), typeof(MiniGraph),
+        DependencyProperty.Register(nameof(History), typeof(IList), typeof(MiniGraph),
             new PropertyMetadata(Array.Empty<double>(), (d, _) => ((MiniGraph)d).InvalidateVisual()));
 
     public static readonly DependencyProperty MaxValueProperty =
@@ -21,13 +19,9 @@ public class MiniGraph : FrameworkElement
         DependencyProperty.Register(nameof(GraphColor), typeof(Color), typeof(MiniGraph),
             new PropertyMetadata(Color.FromRgb(0, 212, 170), (d, _) => ((MiniGraph)d).InvalidateVisual()));
 
-    public static readonly DependencyProperty UnitLabelProperty =
-        DependencyProperty.Register(nameof(UnitLabel), typeof(string), typeof(MiniGraph),
-            new PropertyMetadata("W"));
-
-    public double[] History
+    public IList History
     {
-        get => (double[])GetValue(HistoryProperty);
+        get => (IList)GetValue(HistoryProperty);
         set => SetValue(HistoryProperty, value);
     }
 
@@ -43,21 +37,20 @@ public class MiniGraph : FrameworkElement
         set => SetValue(GraphColorProperty, value);
     }
 
-    public string UnitLabel
-    {
-        get => (string)GetValue(UnitLabelProperty);
-        set => SetValue(UnitLabelProperty, value);
-    }
-
     protected override void OnRender(DrawingContext dc)
     {
         base.OnRender(dc);
 
         var data = History;
-        if (data is null || data.Length < 2) return;
+        if (data is null || data.Count < 2) return;
+
+        // Convert IList to double[] for the renderer
+        var buffer = new double[data.Count];
+        for (int i = 0; i < data.Count; i++)
+            buffer[i] = Convert.ToDouble(data[i]);
 
         var bounds = new Rect(0, 0, ActualWidth, ActualHeight);
-        GraphRenderer.DrawRollingLine(dc, data, bounds, GraphColor, MaxValue);
+        GraphRenderer.DrawRollingLine(dc, buffer, bounds, GraphColor, MaxValue);
     }
 
     protected override Size MeasureOverride(Size availableSize)

@@ -5,9 +5,6 @@ using PowerMonitor.Core.Process;
 
 namespace PowerMonitor.Core.Services;
 
-/// <summary>
-/// 监控服务编排器，管理LHM生命周期和轮询循环
-/// </summary>
 public sealed class MonitoringService : IDisposable
 {
     private readonly Computer _computer;
@@ -18,41 +15,43 @@ public sealed class MonitoringService : IDisposable
     private readonly CancellationTokenSource _cts;
     private Task? _loopTask;
     private readonly double _baselinePower;
+    private int _powerLogCount;
 
-    /// <summary>
-    /// 数据更新事件，每秒触发一次 (在后台线程上)
-    /// </summary>
     public event Action<MonitoringSnapshot>? DataUpdated;
+    public bool IsProcessSamplingComplete => _processMonitor.IsFirstSampleComplete;
+    public string ProcessDiagnosticText => _processMonitor.DiagnosticText;
 
-    public MonitoringService(double cpuTdp = 125, double gpuTdp = 250, int pollingIntervalMs = 1000)
+    public MonitoringService(
+        double cpuTdp = 125,
+        double gpuTdp = 250,
+        int pollingIntervalMs = 1000,
+        bool enableProcessMonitoring = true)
     {
-        // 基线功耗: 主板/内存/SSD/风扇等
         _baselinePower = 30;
 
         _computer = new Computer
         {
             IsCpuEnabled = true,
             IsGpuEnabled = true,
-            IsStorageEnabled = false,
-            IsMemoryEnabled = false,
-            IsMotherboardEnabled = false,
+            IsStorageEnabled = true,
+            IsMemoryEnabled = true,
+            IsMotherboardEnabled = true,
             IsNetworkEnabled = false,
+            IsBatteryEnabled = true,
         };
         _computer.Open();
 
         _cpuMonitor = new CpuMonitor(_computer, cpuTdp);
-        _gpuMonitor = new GpuMonitor(_computer, gpuTdp);
-        _processMonitor = new ProcessMonitor(cpuTdp, gpuTdp);
+        _gpuMonitor = new GpuMonitor(_computer);
+        _processMonitor = new ProcessMonitor(cpuTdp, enableProcessMonitoring);
 
         _timer = new PeriodicTimer(TimeSpan.FromMilliseconds(pollingIntervalMs));
         _cts = new CancellationTokenSource();
     }
 
-    /// <summary>
-    /// 启动监控循环
-    /// </summary>
     public void Start()
     {
+        _processMonitor.Start();
         _loopTask = RunLoopAsync();
     }
 
@@ -65,21 +64,34 @@ public sealed class MonitoringService : IDisposable
                 try
                 {
                     var cpu = _cpuMonitor.ReadSensors();
-                    var gpu = _gpuMonitor.ReadSensors();
-                    var topProcesses = _processMonitor.GetTopProcesses(8);
+                    var gpuReadings = _gpuMonitor.ReadSensors();
+                    var topProcesses = _processMonitor.LatestResults;
+
+                    var (extraPower, batteryDischarge) = ReadExtraPower();
+                    var dgpuSum = gpuReadings.Where(g => !g.IsIntegrated).Sum(g => g.PowerWatts);
+                    var systemTotal = batteryDischarge > 0
+                        ? batteryDischarge
+                        : cpu.PackagePowerWatts + dgpuSum
+                            + (extraPower > 0 ? extraPower : _baselinePower);
+
+                    if (_powerLogCount < 5)
+                    {
+                        Console.WriteLine(
+                            $"[Power] CPU={cpu.PackagePowerWatts:F1}W dGPU={dgpuSum:F1}W " +
+                            $"extra={extraPower:F1}W bat={batteryDischarge:F1}W baseline={_baselinePower}W " +
+                            $"total={systemTotal:F1}W");
+                        _powerLogCount++;
+                    }
 
                     var powerData = new PowerData(
                         CpuPackagePowerWatts: cpu.PackagePowerWatts,
                         CpuCorePowerWatts: cpu.CorePowerWatts,
                         CpuUsagePercent: cpu.UsagePercent,
+                        CpuTemperatureC: cpu.TemperatureC,
                         CpuCoreCount: cpu.CoreCount,
                         CpuPerCoreUsagePercent: cpu.PerCoreUsagePercent,
-                        GpuPowerWatts: gpu.PowerWatts,
-                        GpuUsagePercent: gpu.UsagePercent,
-                        GpuTemperatureC: gpu.TemperatureC,
-                        GpuMemoryUsedMb: gpu.MemoryUsedMb,
-                        GpuMemoryTotalMb: gpu.MemoryTotalMb,
-                        SystemTotalPowerWatts: cpu.PackagePowerWatts + gpu.PowerWatts + _baselinePower,
+                        GpuReadings: gpuReadings,
+                        SystemTotalPowerWatts: systemTotal,
                         Timestamp: DateTimeOffset.Now
                     );
 
@@ -88,14 +100,69 @@ public sealed class MonitoringService : IDisposable
                 }
                 catch
                 {
-                    // 单次读取失败不应中断循环
+                    // single read failure shouldn't stop the loop
                 }
             }
         }
         catch (OperationCanceledException)
         {
-            // 正常退出
+            // normal shutdown
         }
+    }
+
+    private (double extraPower, double batteryDischarge) ReadExtraPower()
+    {
+        double extra = 0;
+        double batteryDischarge = 0;
+
+        foreach (var hw in _computer.Hardware)
+        {
+            var type = hw.HardwareType;
+            if (type == HardwareType.Cpu ||
+                type == HardwareType.GpuNvidia ||
+                type == HardwareType.GpuAmd ||
+                type == HardwareType.GpuIntel)
+                continue;
+
+            try
+            {
+                hw.Update();
+                foreach (var sensor in hw.Sensors)
+                {
+                    if (sensor.SensorType == SensorType.Power)
+                    {
+                        var v = sensor.Value ?? 0;
+                        if (v > 0 && v < 500)
+                        {
+                            if (type == HardwareType.Battery)
+                                batteryDischarge = Math.Max(batteryDischarge, v);
+                            else
+                                extra += v;
+                        }
+                    }
+                }
+
+                foreach (var sub in hw.SubHardware)
+                {
+                    sub.Update();
+                    foreach (var sensor in sub.Sensors)
+                    {
+                        if (sensor.SensorType == SensorType.Power)
+                        {
+                            var v = sensor.Value ?? 0;
+                            if (v > 0 && v < 500)
+                                extra += v;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // some hardware may fail to update
+            }
+        }
+
+        return (extra, batteryDischarge);
     }
 
     public void Dispose()
@@ -103,6 +170,7 @@ public sealed class MonitoringService : IDisposable
         _cts.Cancel();
         _timer.Dispose();
         _cts.Dispose();
+        _processMonitor.Dispose();
         _computer.Close();
     }
 }

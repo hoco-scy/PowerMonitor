@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Windows;
 using PowerMonitor.Core.Services;
 using PowerMonitor.UI.Services;
@@ -10,11 +11,18 @@ namespace PowerMonitor.UI;
 /// </summary>
 public partial class App : Application
 {
+    [DllImport("kernel32.dll")]
+    private static extern bool AttachConsole(int dwProcessId);
+    private const int ATTACH_PARENT_PROCESS = -1;
+
     private MonitoringService? _monitoringService;
     private TrayIconService? _trayIcon;
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+        Console.WriteLine("[PowerMonitor] Starting...");
+
         base.OnStartup(e);
 
         try
