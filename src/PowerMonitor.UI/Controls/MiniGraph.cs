@@ -1,4 +1,6 @@
 using System.Windows;
+using Color = System.Windows.Media.Color;
+using Size = System.Windows.Size;
 using System.Windows.Media;
 using PowerMonitor.UI.Rendering;
 

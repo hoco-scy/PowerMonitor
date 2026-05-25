@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Windows;
+using Application = System.Windows.Application;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using PowerMonitor.Core.Models;
@@ -22,6 +23,9 @@ public partial class MainViewModel : ObservableObject
 
     // GPU (multi-GPU, one item per GPU)
     [ObservableProperty] private ObservableCollection<GpuDisplayItem> _gpuSections = new();
+
+    // Modules
+    [ObservableProperty] private PowerModuleReading[] _modulePowers = Array.Empty<PowerModuleReading>();
 
     // System
     [ObservableProperty] private double _systemTotalPower;
@@ -84,6 +88,7 @@ public partial class MainViewModel : ObservableObject
             // System
             SystemTotalPower = p.SystemTotalPowerWatts;
             SystemTotalText = p.SystemTotalPowerWatts.ToString("F1");
+            ModulePowers = p.ModuleReadings;
 
             // History
             CpuPowerHistory.Add(p.CpuPackagePowerWatts);

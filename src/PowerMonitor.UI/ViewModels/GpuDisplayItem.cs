@@ -1,3 +1,4 @@
+using Color = System.Windows.Media.Color;
 using System.Windows.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using PowerMonitor.Core.Models;

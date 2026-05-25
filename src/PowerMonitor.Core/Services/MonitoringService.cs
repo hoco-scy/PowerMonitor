@@ -67,7 +67,7 @@ public sealed class MonitoringService : IDisposable
                     var gpuReadings = _gpuMonitor.ReadSensors();
                     var topProcesses = _processMonitor.LatestResults;
 
-                    var (extraPower, batteryDischarge) = ReadExtraPower();
+                    var (moduleReadings, extraPower, batteryDischarge) = ReadModuleBreakdown();
                     var dgpuSum = gpuReadings.Where(g => !g.IsIntegrated).Sum(g => g.PowerWatts);
                     var systemTotal = batteryDischarge > 0
                         ? batteryDischarge
@@ -91,6 +91,7 @@ public sealed class MonitoringService : IDisposable
                         CpuCoreCount: cpu.CoreCount,
                         CpuPerCoreUsagePercent: cpu.PerCoreUsagePercent,
                         GpuReadings: gpuReadings,
+                        ModuleReadings: moduleReadings,
                         SystemTotalPowerWatts: systemTotal,
                         Timestamp: DateTimeOffset.Now
                     );
@@ -110,59 +111,105 @@ public sealed class MonitoringService : IDisposable
         }
     }
 
-    private (double extraPower, double batteryDischarge) ReadExtraPower()
+    private (PowerModuleReading[] moduleReadings, double extraPower, double batteryDischarge) ReadModuleBreakdown()
     {
-        double extra = 0;
+        var moduleTotals = new Dictionary<string, (double watts, int count)>();
         double batteryDischarge = 0;
 
-        foreach (var hw in _computer.Hardware)
+        void AddModule(string name, double watts)
         {
-            var type = hw.HardwareType;
-            if (type == HardwareType.Cpu ||
-                type == HardwareType.GpuNvidia ||
-                type == HardwareType.GpuAmd ||
-                type == HardwareType.GpuIntel)
-                continue;
-
-            try
+            if (watts <= 0 || watts >= 500)
             {
-                hw.Update();
-                foreach (var sensor in hw.Sensors)
-                {
-                    if (sensor.SensorType == SensorType.Power)
-                    {
-                        var v = sensor.Value ?? 0;
-                        if (v > 0 && v < 500)
-                        {
-                            if (type == HardwareType.Battery)
-                                batteryDischarge = Math.Max(batteryDischarge, v);
-                            else
-                                extra += v;
-                        }
-                    }
-                }
-
-                foreach (var sub in hw.SubHardware)
-                {
-                    sub.Update();
-                    foreach (var sensor in sub.Sensors)
-                    {
-                        if (sensor.SensorType == SensorType.Power)
-                        {
-                            var v = sensor.Value ?? 0;
-                            if (v > 0 && v < 500)
-                                extra += v;
-                        }
-                    }
-                }
+                return;
             }
-            catch
+
+            if (moduleTotals.TryGetValue(name, out var current))
             {
-                // some hardware may fail to update
+                moduleTotals[name] = (current.watts + watts, current.count + 1);
+            }
+            else
+            {
+                moduleTotals[name] = (watts, 1);
             }
         }
 
-        return (extra, batteryDischarge);
+        void WalkHardware(LibreHardwareMonitor.Hardware.IHardware hardware)
+        {
+            var type = hardware.HardwareType;
+
+            if (type != LibreHardwareMonitor.Hardware.HardwareType.Cpu &&
+                type != LibreHardwareMonitor.Hardware.HardwareType.GpuNvidia &&
+                type != LibreHardwareMonitor.Hardware.HardwareType.GpuAmd &&
+                type != LibreHardwareMonitor.Hardware.HardwareType.GpuIntel)
+            {
+                try
+                {
+                    hardware.Update();
+
+                    foreach (var sensor in hardware.Sensors)
+                    {
+                        if (sensor.SensorType != LibreHardwareMonitor.Hardware.SensorType.Power)
+                        {
+                            continue;
+                        }
+
+                        var value = sensor.Value ?? 0;
+                        if (value <= 0 || value >= 500)
+                        {
+                            continue;
+                        }
+
+                        if (type == LibreHardwareMonitor.Hardware.HardwareType.Battery)
+                        {
+                            batteryDischarge = Math.Max(batteryDischarge, value);
+                        }
+                        else
+                        {
+                            AddModule(GetModuleName(type), value);
+                        }
+                    }
+                }
+                catch
+                {
+                    // some hardware may fail to update
+                }
+            }
+
+            foreach (var sub in hardware.SubHardware)
+            {
+                WalkHardware(sub);
+            }
+        }
+
+        foreach (var hw in _computer.Hardware)
+        {
+            WalkHardware(hw);
+        }
+
+        var moduleReadings = moduleTotals
+            .OrderByDescending(x => x.Value.watts)
+            .Select(x => new PowerModuleReading(x.Key, x.Value.watts, x.Value.count))
+            .ToArray();
+
+        var extra = moduleReadings.Sum(x => x.EstimatedPowerWatts);
+        return (moduleReadings, extra, batteryDischarge);
+    }
+
+    private static string GetModuleName(LibreHardwareMonitor.Hardware.HardwareType hardwareType)
+    {
+        return hardwareType switch
+        {
+            LibreHardwareMonitor.Hardware.HardwareType.Motherboard => "主板/芯片组",
+            LibreHardwareMonitor.Hardware.HardwareType.SuperIO => "主板监控芯片",
+            LibreHardwareMonitor.Hardware.HardwareType.Memory => "内存",
+            LibreHardwareMonitor.Hardware.HardwareType.Storage => "存储",
+            LibreHardwareMonitor.Hardware.HardwareType.Network => "网卡/无线网",
+            LibreHardwareMonitor.Hardware.HardwareType.Cooler => "散热控制器",
+            LibreHardwareMonitor.Hardware.HardwareType.EmbeddedController => "嵌入式控制器",
+            LibreHardwareMonitor.Hardware.HardwareType.Psu => "电源",
+            LibreHardwareMonitor.Hardware.HardwareType.Battery => "电池",
+            _ => hardwareType.ToString()
+        };
     }
 
     public void Dispose()

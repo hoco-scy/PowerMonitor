@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Windows;
+using Application = System.Windows.Application;
+using MessageBox = System.Windows.MessageBox;
 using PowerMonitor.Core.Services;
 using PowerMonitor.UI.Services;
 using PowerMonitor.UI.ViewModels;
@@ -17,6 +19,7 @@ public partial class App : Application
 
     private MonitoringService? _monitoringService;
     private TrayIconService? _trayIcon;
+    private bool _shutdownRequested;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -40,7 +43,11 @@ public partial class App : Application
 
             // 初始化系统托盘
             _trayIcon = new TrayIconService();
-            _trayIcon.Initialize(mainWindow, () => viewModel.ToggleLockCommand.Execute(null));
+            _trayIcon.Initialize(
+                mainWindow,
+                () => viewModel.ToggleLockCommand.Execute(null),
+                () => viewModel.IsLocked,
+                RequestShutdown);
 
             // 启动监控
             _monitoringService.Start();
@@ -64,5 +71,13 @@ public partial class App : Application
         _monitoringService?.Dispose();
         _trayIcon?.Dispose();
         base.OnExit(e);
+    }
+
+    public bool IsShutdownRequested => _shutdownRequested;
+
+    private void RequestShutdown()
+    {
+        _shutdownRequested = true;
+        Shutdown();
     }
 }

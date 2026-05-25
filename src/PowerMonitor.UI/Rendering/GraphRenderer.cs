@@ -1,4 +1,8 @@
 using System.Windows;
+using Color = System.Windows.Media.Color;
+using Point = System.Windows.Point;
+using Pen = System.Windows.Media.Pen;
+using Size = System.Windows.Size;
 using System.Windows.Media;
 
 namespace PowerMonitor.UI.Rendering;

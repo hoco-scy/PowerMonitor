@@ -120,10 +120,7 @@ public sealed class ProcessMonitor : IDisposable
                     var cpuTime = proc.TotalProcessorTime;
                     long ws = proc.WorkingSet64;
 
-                    if (ws >= 10L * 1024 * 1024)
-                    {
-                        samples[pid] = new ProcessSample(cpuTime, ws, proc.ProcessName, sampleTime);
-                    }
+                    samples[pid] = new ProcessSample(cpuTime, ws, proc.ProcessName, sampleTime);
                 }
                 catch
                 {
@@ -144,7 +141,7 @@ public sealed class ProcessMonitor : IDisposable
         Dictionary<int, ProcessSample> previous,
         out string diagnostic)
     {
-        var results = new List<ProcessPowerData>(current.Count);
+        var grouped = new Dictionary<string, ProcessAggregate>(StringComparer.OrdinalIgnoreCase);
         int matched = 0, badWall = 0, badCpu = 0, belowThreshold = 0;
 
         foreach (var (pid, cur) in current)
@@ -163,18 +160,35 @@ public sealed class ProcessMonitor : IDisposable
 
             if (power < 0.05) { belowThreshold++; continue; }
 
-            results.Add(new ProcessPowerData(
-                ProcessId: pid,
-                ProcessName: cur.Name,
-                CpuUsagePercent: Math.Min(cpuFrac * 100, 100 * _coreCount),
-                EstimatedPowerWatts: power,
-                WorkingSetBytes: cur.WorkingSet
-            ));
+            var key = NormalizeProcessName(cur.Name);
+            if (!grouped.TryGetValue(key, out var aggregate))
+            {
+                aggregate = new ProcessAggregate(pid, key);
+            }
+
+            aggregate.Add(pid, Math.Min(cpuFrac * 100, 100 * _coreCount), power, cur.WorkingSet);
+            grouped[key] = aggregate;
         }
 
-        results.Sort((a, b) => b.EstimatedPowerWatts.CompareTo(a.EstimatedPowerWatts));
-        diagnostic = $"matched={matched} badWall={badWall} badCpu={badCpu} belowThr={belowThreshold} shown={results.Count}";
-        return results.Take(8).ToArray();
+        var results = grouped.Values
+            .Select(x => new ProcessPowerData(
+                ProcessId: x.RepresentativeProcessId,
+                ProcessName: x.ProcessName,
+                InstanceCount: x.InstanceCount,
+                CpuUsagePercent: x.CpuUsagePercent,
+                EstimatedPowerWatts: x.EstimatedPowerWatts,
+                WorkingSetBytes: x.WorkingSetBytes))
+            .OrderByDescending(x => x.EstimatedPowerWatts)
+            .Take(8)
+            .ToArray();
+
+        diagnostic = $"matched={matched} badWall={badWall} badCpu={badCpu} belowThr={belowThreshold} shown={results.Length}";
+        return results;
+    }
+
+    private static string NormalizeProcessName(string name)
+    {
+        return string.IsNullOrWhiteSpace(name) ? "unknown" : name.Trim();
     }
 
     public void Dispose()
@@ -190,4 +204,33 @@ public sealed class ProcessMonitor : IDisposable
         string Name,
         DateTime Timestamp
     );
+
+    private sealed class ProcessAggregate
+    {
+        public ProcessAggregate(int representativeProcessId, string processName)
+        {
+            RepresentativeProcessId = representativeProcessId;
+            ProcessName = processName;
+        }
+
+        public int RepresentativeProcessId { get; private set; }
+        public string ProcessName { get; }
+        public int InstanceCount { get; private set; }
+        public double CpuUsagePercent { get; private set; }
+        public double EstimatedPowerWatts { get; private set; }
+        public long WorkingSetBytes { get; private set; }
+
+        public void Add(int processId, double cpuUsagePercent, double estimatedPowerWatts, long workingSetBytes)
+        {
+            if (InstanceCount == 0)
+            {
+                RepresentativeProcessId = processId;
+            }
+
+            InstanceCount++;
+            CpuUsagePercent += cpuUsagePercent;
+            EstimatedPowerWatts += estimatedPowerWatts;
+            WorkingSetBytes = Math.Max(WorkingSetBytes, workingSetBytes);
+        }
+    }
 }

@@ -9,7 +9,6 @@
         ShowInTaskbar="True"
         ResizeMode="CanResizeWithGrip"
         Width="320" Height="580" MinWidth="280" MinHeight="300"
-        MouseLeftButtonDown="OnMouseLeftButtonDown"
         Loaded="OnLoaded">
 
     <Border CornerRadius="12"
@@ -23,6 +22,9 @@
         <ScrollViewer VerticalScrollBarVisibility="Auto"
                       HorizontalScrollBarVisibility="Disabled"
                       Padding="0">
+            <ScrollViewer.Resources>
+                <Style TargetType="ScrollBar" BasedOn="{StaticResource DarkScrollBar}" />
+            </ScrollViewer.Resources>
         <Grid Margin="1">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
@@ -33,8 +35,8 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <!-- Title bar -->
-            <Grid Grid.Row="0" Margin="12,8,8,4">
+            <!-- Title bar (drag handle) -->
+            <Grid Grid.Row="0" Margin="12,8,8,4" MouseLeftButtonDown="OnTitleBarMouseDown">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
@@ -182,6 +184,8 @@
                                             History="{Binding SystemPowerHistory}"
                                             MaxValue="500"
                                             GraphColor="#FF58A6FF" />
+                            <TextBlock Text="MODULES" Style="{StaticResource SectionLabel}" Margin="0,6,0,2" />
+                            <controls:PowerModuleList Modules="{Binding ModulePowers}" />
                     </StackPanel>
                 </Grid>
             </Border>

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Windows.Data;
+using Color = System.Windows.Media.Color;
 using System.Windows.Media;
 
 namespace PowerMonitor.UI.Converters;
