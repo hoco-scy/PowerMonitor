@@ -1,3 +1,6 @@
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using H.NotifyIcon;
@@ -18,35 +21,42 @@ public sealed class TrayIconService : IDisposable
         _mainWindow = mainWindow;
         _toggleLockAction = toggleLockAction;
 
-        _icon = new TaskbarIcon
+        try
         {
-            ToolTipText = "Power Monitor",
-            Icon = CreateDefaultIcon(),
-        };
+            _icon = new TaskbarIcon
+            {
+                ToolTipText = "Power Monitor - 双击显示/隐藏",
+                Icon = CreatePowerIcon(),
+            };
 
-        _icon.TrayMouseDoubleClick += (s, e) => ToggleWindow();
+            _icon.TrayMouseDoubleClick += (s, e) => ToggleWindow();
 
-        var menu = new ContextMenu();
+            var menu = new ContextMenu();
 
-        var showItem = new MenuItem { Header = "显示 / 隐藏" };
-        showItem.Click += (s, e) => ToggleWindow();
-        menu.Items.Add(showItem);
+            var showItem = new MenuItem { Header = "显示 / 隐藏" };
+            showItem.Click += (s, e) => ToggleWindow();
+            menu.Items.Add(showItem);
 
-        var lockItem = new MenuItem { Header = "锁定位置", IsCheckable = true };
-        lockItem.Click += (s, e) => _toggleLockAction?.Invoke();
-        menu.Items.Add(lockItem);
+            var lockItem = new MenuItem { Header = "锁定位置", IsCheckable = true };
+            lockItem.Click += (s, e) => _toggleLockAction?.Invoke();
+            menu.Items.Add(lockItem);
 
-        menu.Items.Add(new Separator());
+            menu.Items.Add(new Separator());
 
-        var exitItem = new MenuItem { Header = "退出" };
-        exitItem.Click += (s, e) =>
+            var exitItem = new MenuItem { Header = "退出 Power Monitor" };
+            exitItem.Click += (s, e) =>
+            {
+                _icon?.Dispose();
+                Application.Current.Shutdown();
+            };
+            menu.Items.Add(exitItem);
+
+            _icon.ContextMenu = menu;
+        }
+        catch
         {
-            _icon?.Dispose();
-            Application.Current.Shutdown();
-        };
-        menu.Items.Add(exitItem);
-
-        _icon.ContextMenu = menu;
+            // 托盘图标创建失败不应阻止应用启动
+        }
     }
 
     private void ToggleWindow()
@@ -60,27 +70,29 @@ public sealed class TrayIconService : IDisposable
         else
         {
             _mainWindow.Show();
+            _mainWindow.WindowState = WindowState.Normal;
             _mainWindow.Activate();
         }
     }
 
-    private static System.Drawing.Icon CreateDefaultIcon()
+    private static Icon CreatePowerIcon()
     {
-        // 创建一个简单的闪电图标
-        var bmp = new System.Drawing.Bitmap(16, 16);
-        using (var g = System.Drawing.Graphics.FromImage(bmp))
+        // 创建16x16的闪电图标
+        using var bmp = new Bitmap(16, 16);
+        using var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.Clear(Color.FromArgb(0x0D, 0x11, 0x17));
+
+        // 画闪电
+        using var pen = new Pen(Color.FromArgb(0, 212, 170), 2);
+        var points = new PointF[]
         {
-            g.Clear(System.Drawing.Color.FromArgb(0x0D, 0x11, 0x17));
-            using var pen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(0, 212, 170), 2);
-            // 简化的闪电形状
-            var points = new System.Drawing.Point[]
-            {
-                new(9, 1), new(5, 8), new(8, 8), new(6, 15), new(11, 7), new(8, 7), new(10, 1)
-            };
-            g.DrawLines(pen, points);
-        }
-        var hIcon = bmp.GetHicon();
-        return System.Drawing.Icon.FromHandle(hIcon);
+            new(10f, 1f), new(5.5f, 8f), new(8.5f, 8f),
+            new(5f, 15f), new(11f, 7f), new(8f, 7f), new(10.5f, 1f)
+        };
+        g.DrawLines(pen, points);
+
+        return Icon.FromHandle(bmp.GetHicon());
     }
 
     public void Dispose()

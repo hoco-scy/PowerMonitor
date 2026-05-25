@@ -6,7 +6,7 @@
         AllowsTransparency="True"
         Background="Transparent"
         Topmost="True"
-        ShowInTaskbar="False"
+        ShowInTaskbar="True"
         ResizeMode="NoResize"
         Width="320" Height="480"
         MouseLeftButtonDown="OnMouseLeftButtonDown"

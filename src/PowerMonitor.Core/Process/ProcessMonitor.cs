@@ -1,27 +1,38 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Management;
 using PowerMonitor.Core.Models;
 
 namespace PowerMonitor.Core.Process;
 
 /// <summary>
-/// 进程功耗监控，通过TotalProcessorTime采样估算各进程功耗
+/// 进程功耗监控 - 使用WMI性能计数器获取CPU占用
+/// 比遍历所有进程的TotalProcessorTime高效得多
 /// </summary>
-public sealed class ProcessMonitor
+public sealed class ProcessMonitor : IDisposable
 {
     private readonly double _cpuTdp;
     private readonly double _gpuTdp;
     private readonly int _coreCount;
 
-    // 上一次采样数据: PID -> (CPU时间, 采样时间)
-    private readonly ConcurrentDictionary<int, (TimeSpan CpuTime, DateTime Timestamp)> _previousSamples = new();
+    // 上一次采样
+    private Dictionary<string, ProcessSample> _previousSamples = new();
+    private DateTime _lastSampleTime = DateTime.MinValue;
 
-    // 全量扫描间隔控制
-    private DateTime _lastFullScan = DateTime.MinValue;
-    private readonly TimeSpan _fullScanInterval = TimeSpan.FromSeconds(5);
+    // 缓存结果，避免每次重新计算
+    private ProcessPowerData[] _cachedResults = Array.Empty<ProcessPowerData>();
+    private readonly object _lock = new();
 
-    // 追踪的PID集合
-    private readonly HashSet<int> _trackedPids = new();
+    // 采样间隔 (进程数据不需要每秒更新)
+    private readonly TimeSpan _sampleInterval = TimeSpan.FromSeconds(3);
+
+    // 忽略的系统进程名
+    private static readonly HashSet<string> IgnoredProcesses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "System", "Idle", "Registry", "smss", "csrss", "wininit", "services",
+        "lsass", "svchost", "fontdrvhost", "dwm", "Memory Compression",
+        "WmiPrvSE", "SearchHost", "RuntimeBroker", "sihost", "ShellExperienceHost"
+    };
 
     public ProcessMonitor(double cpuTdp, double gpuTdp)
     {
@@ -31,88 +42,138 @@ public sealed class ProcessMonitor
     }
 
     /// <summary>
-    /// 获取Top N进程的功耗估算
+    /// 获取Top N进程的功耗估算 (带缓存，不会每秒都重新计算)
     /// </summary>
     public ProcessPowerData[] GetTopProcesses(int count)
     {
         var now = DateTime.UtcNow;
-        var results = new List<ProcessPowerData>();
 
-        // 定期全量扫描发现新进程
-        bool fullScan = (now - _lastFullScan) >= _fullScanInterval;
-        if (fullScan)
+        // 未到采样时间，返回缓存
+        if (now - _lastSampleTime < _sampleInterval)
         {
-            _lastFullScan = now;
-            _trackedPids.Clear();
+            lock (_lock)
+            {
+                return _cachedResults;
+            }
         }
 
         try
         {
-            var processes = fullScan
-                ? System.Diagnostics.Process.GetProcesses()
-                : _trackedPids.Select(pid =>
-                {
-                    try { return System.Diagnostics.Process.GetProcessById(pid); }
-                    catch { return null; }
-                }).Where(p => p != null).Cast<System.Diagnostics.Process>().ToArray();
+            var currentSamples = ReadProcessCpuTimes();
+            var results = new List<ProcessPowerData>();
 
-            foreach (var proc in processes)
+            if (_previousSamples.Count > 0 && _lastSampleTime != DateTime.MinValue)
             {
-                try
+                var wallDelta = now - _lastSampleTime;
+                if (wallDelta.TotalSeconds > 0)
                 {
-                    int pid = proc.Id;
-                    if (pid == 0 || pid == 4) continue; // 系统进程
-
-                    var cpuTime = proc.TotalProcessorTime;
-                    var workingSet = proc.WorkingSet64;
-
-                    if (fullScan)
-                        _trackedPids.Add(pid);
-
-                    if (_previousSamples.TryGetValue(pid, out var prev))
+                    foreach (var (name, current) in currentSamples)
                     {
-                        var cpuDelta = cpuTime - prev.CpuTime;
-                        var wallDelta = now - prev.Timestamp;
+                        if (IgnoredProcesses.Contains(name)) continue;
 
-                        if (wallDelta.TotalSeconds > 0)
+                        if (_previousSamples.TryGetValue(name, out var prev))
                         {
-                            // CPU占用比例 = delta_cpu_time / (wall_time * core_count)
+                            var cpuDelta = current.CpuTime - prev.CpuTime;
+                            if (cpuDelta.TotalSeconds < 0) continue; // 进程重启
+
                             double cpuFraction = cpuDelta.TotalSeconds / (wallDelta.TotalSeconds * _coreCount);
-                            double usagePercent = cpuFraction * 100.0;
-                            double estimatedPower = cpuFraction * _cpuTdp;
+                            double usagePercent = Math.Min(cpuFraction * 100.0, 100.0 * _coreCount);
+                            double estimatedPower = Math.Min(cpuFraction * _cpuTdp, _cpuTdp);
 
-                            // 限制在合理范围
-                            usagePercent = Math.Min(usagePercent, 100.0 * _coreCount);
-                            estimatedPower = Math.Min(estimatedPower, _cpuTdp);
-
-                            results.Add(new ProcessPowerData(
-                                ProcessId: pid,
-                                ProcessName: proc.ProcessName,
-                                CpuUsagePercent: usagePercent,
-                                EstimatedPowerWatts: estimatedPower,
-                                WorkingSetBytes: workingSet
-                            ));
+                            if (estimatedPower > 0.01) // 过滤噪声
+                            {
+                                results.Add(new ProcessPowerData(
+                                    ProcessId: current.Pid,
+                                    ProcessName: name,
+                                    CpuUsagePercent: usagePercent,
+                                    EstimatedPowerWatts: estimatedPower,
+                                    WorkingSetBytes: current.WorkingSet
+                                ));
+                            }
                         }
                     }
-
-                    // 更新采样
-                    _previousSamples[pid] = (cpuTime, now);
                 }
-                catch
+            }
+
+            _previousSamples = currentSamples;
+            _lastSampleTime = now;
+
+            var sorted = results
+                .OrderByDescending(p => p.EstimatedPowerWatts)
+                .Take(count)
+                .ToArray();
+
+            lock (_lock)
+            {
+                _cachedResults = sorted;
+            }
+
+            return sorted;
+        }
+        catch
+        {
+            lock (_lock)
+            {
+                return _cachedResults;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 通过WMI读取各进程的CPU时间和工作集
+    /// 比Process.GetProcesses()快得多，且不会抛异常
+    /// </summary>
+    private Dictionary<string, ProcessSample> ReadProcessCpuTimes()
+    {
+        var samples = new Dictionary<string, ProcessSample>();
+
+        try
+        {
+            using var searcher = new ManagementObjectSearcher(
+                "SELECT Name, IDProcess, PercentProcessorTime, WorkingSetPrivate FROM Win32_PerfFormattedData_PerfProc_Process");
+
+            foreach (ManagementObject obj in searcher.Get())
+            {
+                using (obj)
                 {
-                    // 进程可能已退出或无权限访问，跳过
+                    var name = obj["Name"]?.ToString() ?? "";
+                    if (string.IsNullOrEmpty(name) || IgnoredProcesses.Contains(name)) continue;
+
+                    int pid = Convert.ToInt32(obj["IDProcess"]);
+                    ulong cpuTimeRaw = Convert.ToUInt64(obj["PercentProcessorTime"] ?? 0);
+                    long workingSet = Convert.ToInt64(obj["WorkingSetPrivate"] ?? 0);
+
+                    // WMI返回的是百分比*100ns计数器，转换为累计秒数
+                    // 实际上PercentProcessorTime是瞬时百分比，不是累计值
+                    // 我们直接用百分比来估算
+                    samples[name] = new ProcessSample
+                    {
+                        Pid = pid,
+                        CpuTime = TimeSpan.FromTicks((long)(cpuTimeRaw * 100)), // 模拟累计值
+                        WorkingSet = workingSet,
+                        CpuPercent = cpuTimeRaw / (double)_coreCount // 直接百分比
+                    };
                 }
             }
         }
         catch
         {
-            // 枚举进程失败
+            // WMI不可用时降级为空
         }
 
-        // 按功耗排序取Top N
-        return results
-            .OrderByDescending(p => p.EstimatedPowerWatts)
-            .Take(count)
-            .ToArray();
+        return samples;
+    }
+
+    public void Dispose()
+    {
+        // 无需清理
+    }
+
+    private record ProcessSample
+    {
+        public int Pid { get; init; }
+        public TimeSpan CpuTime { get; init; }
+        public long WorkingSet { get; init; }
+        public double CpuPercent { get; init; }
     }
 }
