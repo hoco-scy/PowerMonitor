@@ -1,5 +1,9 @@
 using System.Globalization;
 using System.Windows;
+using Color = System.Windows.Media.Color;
+using FlowDirection = System.Windows.FlowDirection;
+using Point = System.Windows.Point;
+using Size = System.Windows.Size;
 using System.Windows.Media;
 using PowerMonitor.UI.Rendering;
 

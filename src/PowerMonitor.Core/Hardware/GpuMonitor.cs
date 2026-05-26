@@ -6,10 +6,12 @@ namespace PowerMonitor.Core.Hardware;
 public sealed class GpuMonitor
 {
     private readonly Computer _computer;
+    private readonly double _gpuTdp;
 
-    public GpuMonitor(Computer computer)
+    public GpuMonitor(Computer computer, double gpuTdp = 250)
     {
         _computer = computer;
+        _gpuTdp = gpuTdp;
     }
 
     public GpuReading[] ReadSensors()
@@ -31,7 +33,7 @@ public sealed class GpuMonitor
         return readings;
     }
 
-    private static GpuReading ReadGpu(IHardware gpuHardware)
+    private GpuReading ReadGpu(IHardware gpuHardware)
     {
         gpuHardware.Update();
 
@@ -108,11 +110,19 @@ public sealed class GpuMonitor
             }
         }
 
+        bool isIntegrated = IsIntegratedGpu(gpuHardware);
+
+        // Fallback: estimate power from load if no sensor reported power
+        if (power <= 0 && load > 0)
+        {
+            var idleFrac = isIntegrated ? 0.05 : 0.10;
+            var idlePower = _gpuTdp * idleFrac;
+            power = idlePower + (load / 100.0) * (_gpuTdp - idlePower);
+        }
+
         // Pick best temperature: prefer Core, then HotSpot, then any valid
         if (coreTemp > 0) temp = coreTemp;
         else if (hotSpotTemp > 0) temp = hotSpotTemp;
-
-        bool isIntegrated = IsIntegratedGpu(gpuHardware);
 
         return new GpuReading(
             Name: gpuHardware.Name,

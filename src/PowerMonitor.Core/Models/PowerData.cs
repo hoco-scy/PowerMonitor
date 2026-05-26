@@ -15,6 +15,9 @@ public record PowerData(
     // GPU (all GPUs detected)
     GpuReading[] GpuReadings,
 
+    // 其他模块功耗（主板、网卡、存储、电池等）
+    PowerModuleReading[] ModuleReadings,
+
     // 系统总功耗 (CPU + GPU + 基线估算)
     double SystemTotalPowerWatts,
 

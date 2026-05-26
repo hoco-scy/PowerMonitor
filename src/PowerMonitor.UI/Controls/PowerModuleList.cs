@@ -11,30 +11,28 @@ using PowerMonitor.Core.Models;
 
 namespace PowerMonitor.UI.Controls;
 
-public class ProcessList : StackPanel
+public class PowerModuleList : StackPanel
 {
-    public static readonly DependencyProperty ProcessesProperty =
-        DependencyProperty.Register(nameof(Processes), typeof(ProcessPowerData[]), typeof(ProcessList),
-            new PropertyMetadata(Array.Empty<ProcessPowerData>(), (d, _) => ((ProcessList)d).Rebuild()));
+    public static readonly DependencyProperty ModulesProperty =
+        DependencyProperty.Register(nameof(Modules), typeof(PowerModuleReading[]), typeof(PowerModuleList),
+            new PropertyMetadata(Array.Empty<PowerModuleReading>(), (d, _) => ((PowerModuleList)d).Rebuild()));
 
-    public ProcessPowerData[] Processes
+    public PowerModuleReading[] Modules
     {
-        get => (ProcessPowerData[])GetValue(ProcessesProperty);
-        set => SetValue(ProcessesProperty, value);
+        get => (PowerModuleReading[])GetValue(ModulesProperty);
+        set => SetValue(ModulesProperty, value);
     }
 
     private void Rebuild()
     {
         Children.Clear();
 
-        var processes = Processes;
-        Console.WriteLine($"[ProcessList] Rebuild called, processes={processes?.Length ?? -1}");
-
-        if (processes is null || processes.Length == 0)
+        var modules = Modules;
+        if (modules is null || modules.Length == 0)
         {
             Children.Add(new TextBlock
             {
-                Text = "no data",
+                Text = "no module power data",
                 Foreground = Brushes.Gray,
                 FontFamily = new FontFamily("Consolas"),
                 FontSize = 11
@@ -42,18 +40,16 @@ public class ProcessList : StackPanel
             return;
         }
 
-        double maxPower = processes.Max(p => p.EstimatedPowerWatts);
+        double maxPower = modules.Max(m => m.EstimatedPowerWatts);
         if (maxPower <= 0) maxPower = 1;
 
-        foreach (var proc in processes)
+        foreach (var module in modules.Take(10))
         {
-            Children.Add(CreateProcessRow(proc, maxPower));
+            Children.Add(CreateModuleRow(module, maxPower));
         }
-
-        Console.WriteLine($"[ProcessList] Added {processes.Length} rows");
     }
 
-    private static FrameworkElement CreateProcessRow(ProcessPowerData proc, double maxPower)
+    private static FrameworkElement CreateModuleRow(PowerModuleReading module, double maxPower)
     {
         var grid = new Grid { Margin = new Thickness(0, 2, 0, 2) };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -62,7 +58,7 @@ public class ProcessList : StackPanel
 
         var nameBlock = new TextBlock
         {
-            Text = proc.DisplayName.Length > 14 ? proc.DisplayName[..14] : proc.DisplayName,
+            Text = module.Name,
             FontFamily = new FontFamily("Consolas"),
             FontSize = 11,
             Foreground = new SolidColorBrush(Color.FromRgb(0xE6, 0xED, 0xF3)),
@@ -87,10 +83,10 @@ public class ProcessList : StackPanel
             RadiusY = 2
         };
 
-        double ratio = proc.EstimatedPowerWatts / maxPower;
+        double ratio = module.EstimatedPowerWatts / maxPower;
         var barFill = new Rectangle
         {
-            Fill = new SolidColorBrush(Color.FromRgb(0, 212, 170)),
+            Fill = new SolidColorBrush(Color.FromRgb(0x58, 0xA6, 0xFF)),
             RadiusX = 2,
             RadiusY = 2,
             HorizontalAlignment = HorizontalAlignment.Left,
@@ -103,7 +99,7 @@ public class ProcessList : StackPanel
 
         var powerBlock = new TextBlock
         {
-            Text = $"{proc.EstimatedPowerWatts:F1}W",
+            Text = $"{module.EstimatedPowerWatts:F1}W",
             FontFamily = new FontFamily("Consolas"),
             FontSize = 11,
             Foreground = new SolidColorBrush(Color.FromRgb(0x8B, 0x94, 0x9E)),

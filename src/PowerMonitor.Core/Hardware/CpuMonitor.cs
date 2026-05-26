@@ -7,11 +7,13 @@ public sealed class CpuMonitor
 {
     private readonly Computer _computer;
     private readonly double _cpuTdp;
+    private readonly double _idlePowerWatts;
 
     public CpuMonitor(Computer computer, double cpuTdp)
     {
         _computer = computer;
         _cpuTdp = cpuTdp;
+        _idlePowerWatts = cpuTdp * 0.12;
     }
 
     public CpuReading ReadSensors()
@@ -83,10 +85,11 @@ public sealed class CpuMonitor
             }
         }
 
-        // Fallback: estimate power from load × TDP
+        // Fallback: idle + dynamic load model (only when load sensor is available)
         if (packagePower <= 0 && totalLoad > 0)
         {
-            packagePower = (totalLoad / 100.0) * _cpuTdp;
+            var loadFraction = totalLoad / 100.0;
+            packagePower = _idlePowerWatts + loadFraction * (_cpuTdp - _idlePowerWatts);
         }
 
         return new CpuReading(

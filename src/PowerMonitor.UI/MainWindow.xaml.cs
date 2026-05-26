@@ -1,4 +1,6 @@
 using System.Windows;
+using Color = System.Windows.Media.Color;
+using Application = System.Windows.Application;
 using System.Windows.Input;
 using System.Windows.Media;
 using PowerMonitor.UI.ViewModels;
@@ -11,10 +13,13 @@ namespace PowerMonitor.UI;
 public partial class MainWindow : Window
 {
     private MainViewModel? _viewModel;
+    internal bool IsDragging { get; private set; }
 
     public MainWindow()
     {
         InitializeComponent();
+        Closing += OnClosing;
+        StateChanged += OnStateChanged;
     }
 
     public void SetViewModel(MainViewModel viewModel)
@@ -50,11 +55,18 @@ public partial class MainWindow : Window
         Top = workArea.Bottom - Height - 16;
     }
 
-    private void OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    private void OnTitleBarMouseDown(object sender, MouseButtonEventArgs e)
     {
         if (_viewModel?.IsLocked != true)
         {
-            DragMove();
+            IsDragging = true;
+            _viewModel?.OnDragStateChanged(true);
+            try { DragMove(); }
+            finally
+            {
+                IsDragging = false;
+                _viewModel?.OnDragStateChanged(false);
+            }
         }
     }
 
@@ -65,11 +77,29 @@ public partial class MainWindow : Window
 
     private void OnMinimizeClick(object sender, RoutedEventArgs e)
     {
+        WindowState = WindowState.Minimized;
         Hide();
     }
 
     private void OnCloseClick(object sender, RoutedEventArgs e)
     {
         Hide();
+    }
+
+    private void OnStateChanged(object? sender, EventArgs e)
+    {
+        if (WindowState == WindowState.Minimized)
+        {
+            Hide();
+        }
+    }
+
+    private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        if (Application.Current is App app && !app.IsShutdownRequested)
+        {
+            e.Cancel = true;
+            Hide();
+        }
     }
 }

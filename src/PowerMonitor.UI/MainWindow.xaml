@@ -6,11 +6,9 @@
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
-        Topmost="True"
-        ShowInTaskbar="True"
-        ResizeMode="NoResize"
-        Width="320" Height="580"
-        MouseLeftButtonDown="OnMouseLeftButtonDown"
+        ShowInTaskbar="False"
+        ResizeMode="CanResizeWithGrip"
+        Width="320" Height="580" MinWidth="280" MinHeight="300"
         Loaded="OnLoaded">
 
     <Border CornerRadius="12"
@@ -21,18 +19,21 @@
             <DropShadowEffect Color="#000000" BlurRadius="20" ShadowDepth="0" Opacity="0.6" />
         </Border.Effect>
 
+        <ScrollViewer VerticalScrollBarVisibility="Hidden"
+                      HorizontalScrollBarVisibility="Disabled"
+                      Padding="0">
         <Grid Margin="1">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
-                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <!-- Title bar -->
-            <Grid Grid.Row="0" Margin="12,8,8,4">
+            <!-- Title bar (drag handle) -->
+            <Grid Grid.Row="0" Margin="12,8,8,4" MouseLeftButtonDown="OnTitleBarMouseDown">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
@@ -180,6 +181,8 @@
                                             History="{Binding SystemPowerHistory}"
                                             MaxValue="500"
                                             GraphColor="#FF58A6FF" />
+                            <TextBlock Text="MODULES" Style="{StaticResource SectionLabel}" Margin="0,6,0,2" />
+                            <controls:PowerModuleList Modules="{Binding ModulePowers}" />
                     </StackPanel>
                 </Grid>
             </Border>
@@ -222,5 +225,6 @@
                 </DockPanel>
             </Border>
         </Grid>
+        </ScrollViewer>
     </Border>
 </Window>

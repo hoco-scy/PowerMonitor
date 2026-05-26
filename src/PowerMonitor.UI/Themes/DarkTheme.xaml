@@ -129,6 +129,39 @@
         </Setter>
     </Style>
 
+    <!-- 滚动条 -->
+    <Style x:Key="DarkScrollBar" TargetType="ScrollBar">
+        <Setter Property="Width" Value="6" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ScrollBar">
+                    <Grid>
+                        <Track x:Name="PART_Track" IsDirectionReversed="True">
+                            <Track.Thumb>
+                                <Thumb>
+                                    <Thumb.Template>
+                                        <ControlTemplate TargetType="Thumb">
+                                            <Border CornerRadius="3"
+                                                    Background="#33FFFFFF"
+                                                    Margin="1,0" />
+                                        </ControlTemplate>
+                                    </Thumb.Template>
+                                </Thumb>
+                            </Track.Thumb>
+                        </Track>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="Orientation" Value="Horizontal">
+                <Setter Property="Width" Value="Auto" />
+                <Setter Property="Height" Value="6" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
     <!-- 进程列表项 -->
     <Style x:Key="ProcessNameText" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />

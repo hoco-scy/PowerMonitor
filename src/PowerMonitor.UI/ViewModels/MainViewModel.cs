@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Windows;
+using Application = System.Windows.Application;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using PowerMonitor.Core.Models;
@@ -10,8 +11,8 @@ namespace PowerMonitor.UI.ViewModels;
 public partial class MainViewModel : ObservableObject
 {
     private readonly MonitoringService _service;
-    private readonly int _historyLength = 60;
     private readonly DateTime _startTime = DateTime.Now;
+    private MainWindow? _mainWindow;
 
     // CPU
     [ObservableProperty] private double _cpuPower;
@@ -24,13 +25,17 @@ public partial class MainViewModel : ObservableObject
     // GPU (multi-GPU, one item per GPU)
     [ObservableProperty] private ObservableCollection<GpuDisplayItem> _gpuSections = new();
 
+    // Modules
+    [ObservableProperty] private PowerModuleReading[] _modulePowers = Array.Empty<PowerModuleReading>();
+
     // System
     [ObservableProperty] private double _systemTotalPower;
     [ObservableProperty] private string _systemTotalText = "0.0";
 
-    // Chart history
-    [ObservableProperty] private double[] _cpuPowerHistory;
-    [ObservableProperty] private double[] _systemPowerHistory;
+    // Chart history (capped at ~2 minutes of data at 1 sample/sec)
+    private const int MaxHistoryLength = 120;
+    [ObservableProperty] private List<double> _cpuPowerHistory = new();
+    [ObservableProperty] private List<double> _systemPowerHistory = new();
     [ObservableProperty] private double _cpuHistoryMax = 100;
 
     // Processes
@@ -47,14 +52,21 @@ public partial class MainViewModel : ObservableObject
     public MainViewModel(MonitoringService service)
     {
         _service = service;
-        _cpuPowerHistory = new double[_historyLength];
-        _systemPowerHistory = new double[_historyLength];
-
         service.DataUpdated += OnDataUpdated;
+    }
+
+    internal void SetMainWindow(MainWindow window) => _mainWindow = window;
+
+    internal void OnDragStateChanged(bool isDragging)
+    {
+        _service.IsPaused = isDragging;
     }
 
     private void OnDataUpdated(MonitoringSnapshot snapshot)
     {
+        // 在投递前检查，避免拖拽时向 Dispatcher 队列投递消息
+        if (_mainWindow?.IsDragging == true) return;
+
         Application.Current.Dispatcher.BeginInvoke(() =>
         {
             var p = snapshot.Power;
@@ -87,11 +99,18 @@ public partial class MainViewModel : ObservableObject
             // System
             SystemTotalPower = p.SystemTotalPowerWatts;
             SystemTotalText = p.SystemTotalPowerWatts.ToString("F1");
+            ModulePowers = p.ModuleReadings;
 
-            // History
-            PushHistory(CpuPowerHistory, p.CpuPackagePowerWatts);
-            PushHistory(SystemPowerHistory, p.SystemTotalPowerWatts);
-            CpuHistoryMax = Math.Max(50, CpuPowerHistory.Max() * 1.3);
+            // History — 创建新列表以触发 DependencyProperty 变更回调
+            var cpuHist = new List<double>(CpuPowerHistory) { p.CpuPackagePowerWatts };
+            if (cpuHist.Count > MaxHistoryLength) cpuHist.RemoveAt(0);
+            CpuPowerHistory = cpuHist;
+
+            var sysHist = new List<double>(SystemPowerHistory) { p.SystemTotalPowerWatts };
+            if (sysHist.Count > MaxHistoryLength) sysHist.RemoveAt(0);
+            SystemPowerHistory = sysHist;
+
+            CpuHistoryMax = Math.Max(50, cpuHist.Max() * 1.3);
 
             // Processes
             TopProcesses = snapshot.TopProcesses;
@@ -106,12 +125,6 @@ public partial class MainViewModel : ObservableObject
 
             GraphVersion++;
         });
-    }
-
-    private static void PushHistory(double[] buffer, double value)
-    {
-        Array.Copy(buffer, 1, buffer, 0, buffer.Length - 1);
-        buffer[^1] = value;
     }
 
     [RelayCommand]
