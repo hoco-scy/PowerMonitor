@@ -43,7 +43,7 @@ public class PowerModuleList : StackPanel
         double maxPower = modules.Max(m => m.EstimatedPowerWatts);
         if (maxPower <= 0) maxPower = 1;
 
-        foreach (var module in modules.Take(6))
+        foreach (var module in modules.Take(10))
         {
             Children.Add(CreateModuleRow(module, maxPower));
         }

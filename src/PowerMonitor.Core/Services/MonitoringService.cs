@@ -10,6 +10,7 @@ public sealed class MonitoringService : IDisposable
     private readonly Computer _computer;
     private readonly CpuMonitor _cpuMonitor;
     private readonly GpuMonitor _gpuMonitor;
+    private readonly PeripheralPowerEstimator _peripheralEstimator;
     private readonly ProcessMonitor _processMonitor;
     private readonly PeriodicTimer _timer;
     private readonly CancellationTokenSource _cts;
@@ -36,13 +37,14 @@ public sealed class MonitoringService : IDisposable
             IsStorageEnabled = true,
             IsMemoryEnabled = true,
             IsMotherboardEnabled = true,
-            IsNetworkEnabled = false,
+            IsNetworkEnabled = true,
             IsBatteryEnabled = true,
         };
         _computer.Open();
 
         _cpuMonitor = new CpuMonitor(_computer, cpuTdp);
         _gpuMonitor = new GpuMonitor(_computer);
+        _peripheralEstimator = new PeripheralPowerEstimator();
         _processMonitor = new ProcessMonitor(cpuTdp, enableProcessMonitoring);
 
         _timer = new PeriodicTimer(TimeSpan.FromMilliseconds(pollingIntervalMs));
@@ -72,13 +74,14 @@ public sealed class MonitoringService : IDisposable
                     var systemTotal = batteryDischarge > 0
                         ? batteryDischarge
                         : cpu.PackagePowerWatts + dgpuSum
-                            + (extraPower > 0 ? extraPower : _baselinePower);
+                            + extraPower
+                            + _baselinePower;
 
                     if (_powerLogCount < 5)
                     {
                         Console.WriteLine(
                             $"[Power] CPU={cpu.PackagePowerWatts:F1}W dGPU={dgpuSum:F1}W " +
-                            $"extra={extraPower:F1}W bat={batteryDischarge:F1}W baseline={_baselinePower}W " +
+                            $"modules={extraPower:F1}W bat={batteryDischarge:F1}W baseline={_baselinePower}W " +
                             $"total={systemTotal:F1}W");
                         _powerLogCount++;
                     }
@@ -189,10 +192,24 @@ public sealed class MonitoringService : IDisposable
         var moduleReadings = moduleTotals
             .OrderByDescending(x => x.Value.watts)
             .Select(x => new PowerModuleReading(x.Key, x.Value.watts, x.Value.count))
-            .ToArray();
+            .ToList();
 
-        var extra = moduleReadings.Sum(x => x.EstimatedPowerWatts);
-        return (moduleReadings, extra, batteryDischarge);
+        var estimatedModules = _peripheralEstimator.ReadEstimatedModules(
+            includeWifiEstimate: !moduleTotals.ContainsKey("网卡/无线网"));
+
+        foreach (var estimated in estimatedModules)
+        {
+            AddModule(estimated.Name, estimated.EstimatedPowerWatts);
+        }
+
+        moduleReadings = moduleTotals
+            .OrderByDescending(x => x.Value.watts)
+            .Select(x => new PowerModuleReading(x.Key, x.Value.watts, x.Value.count))
+            .ToList();
+
+        var moduleArray = moduleReadings.ToArray();
+        var extra = moduleArray.Sum(x => x.EstimatedPowerWatts);
+        return (moduleArray, extra, batteryDischarge);
     }
 
     private static string GetModuleName(LibreHardwareMonitor.Hardware.HardwareType hardwareType)
@@ -217,6 +234,7 @@ public sealed class MonitoringService : IDisposable
         _cts.Cancel();
         _timer.Dispose();
         _cts.Dispose();
+        _peripheralEstimator.Dispose();
         _processMonitor.Dispose();
         _computer.Close();
     }
