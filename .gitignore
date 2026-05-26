@@ -34,3 +34,14 @@ desktop.ini
 
 ## Claude
 .claude/
+
+
+# Ignore the release zip file
+PowerMonitor-release*.zip
+PowerMonitor-release*/
+
+# Ignore the scripts folder
+scripts/
+
+# Ignore the publish-standalone folder
+publish-standalone*
