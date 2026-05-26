@@ -13,6 +13,7 @@ namespace PowerMonitor.UI;
 public partial class MainWindow : Window
 {
     private MainViewModel? _viewModel;
+    internal bool IsDragging { get; private set; }
 
     public MainWindow()
     {
@@ -58,7 +59,14 @@ public partial class MainWindow : Window
     {
         if (_viewModel?.IsLocked != true)
         {
-            DragMove();
+            IsDragging = true;
+            _viewModel?.OnDragStateChanged(true);
+            try { DragMove(); }
+            finally
+            {
+                IsDragging = false;
+                _viewModel?.OnDragStateChanged(false);
+            }
         }
     }
 

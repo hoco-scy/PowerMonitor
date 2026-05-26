@@ -39,6 +39,7 @@ public partial class App : Application
             // 设置主窗口
             var mainWindow = new MainWindow();
             mainWindow.SetViewModel(viewModel);
+            viewModel.SetMainWindow(mainWindow);
             MainWindow = mainWindow;
 
             // 初始化系统托盘

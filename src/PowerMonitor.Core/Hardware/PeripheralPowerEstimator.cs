@@ -119,7 +119,9 @@ public sealed class PeripheralPowerEstimator : IDisposable
 
             var mbps = (deltaBytes * 8.0) / 1_000_000.0 / elapsedSeconds;
             // Typical Wi-Fi draw model: idle floor + activity slope with cap.
-            _lastWifiPower = 0.5 + Math.Min(5.5, mbps * 0.12);
+            var rawPower = 0.5 + Math.Min(5.5, mbps * 0.12);
+            const double alpha = 0.3;
+            _lastWifiPower = alpha * rawPower + (1 - alpha) * _lastWifiPower;
             return _lastWifiPower;
         }
         catch

@@ -49,10 +49,10 @@ public partial class GpuDisplayItem : ObservableObject
             ? $"{reading.MemoryUsedMb:F0}/{reading.MemoryTotalMb:F0} MB"
             : "";
 
-        PowerHistory.Add(reading.PowerWatts);
-        if (PowerHistory.Count > MaxHistoryLength) PowerHistory.RemoveAt(0);
+        var hist = new List<double>(PowerHistory) { reading.PowerWatts };
+        if (hist.Count > MaxHistoryLength) hist.RemoveAt(0);
+        PowerHistory = hist;
 
-        HistoryMax = Math.Max(50, PowerHistory.Max() * 1.3);
-        OnPropertyChanged(nameof(PowerHistory));
+        HistoryMax = Math.Max(50, hist.Max() * 1.3);
     }
 }

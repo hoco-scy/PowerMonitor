@@ -15,12 +15,31 @@ public sealed class MonitoringService : IDisposable
     private readonly PeriodicTimer _timer;
     private readonly CancellationTokenSource _cts;
     private Task? _loopTask;
-    private readonly double _baselinePower;
+    private const double BaseSystemOverhead = 10.0;
+    private const double BaselineFloor = 2.0;
+
+    private static readonly Dictionary<string, double> BaselineAllowanceByCategory = new()
+    {
+        ["内存"] = 3.0,
+        ["存储"] = 3.0,
+        ["主板/芯片组"] = 3.0,
+        ["主板监控芯片"] = 0.0,
+        ["散热控制器"] = 1.0,
+        ["嵌入式控制器"] = 0.5,
+    };
+
     private int _powerLogCount;
+    private volatile bool _isPaused;
 
     public event Action<MonitoringSnapshot>? DataUpdated;
     public bool IsProcessSamplingComplete => _processMonitor.IsFirstSampleComplete;
     public string ProcessDiagnosticText => _processMonitor.DiagnosticText;
+
+    public bool IsPaused
+    {
+        get => _isPaused;
+        set => _isPaused = value;
+    }
 
     public MonitoringService(
         double cpuTdp = 125,
@@ -28,8 +47,6 @@ public sealed class MonitoringService : IDisposable
         int pollingIntervalMs = 1000,
         bool enableProcessMonitoring = true)
     {
-        _baselinePower = 30;
-
         _computer = new Computer
         {
             IsCpuEnabled = true,
@@ -43,7 +60,7 @@ public sealed class MonitoringService : IDisposable
         _computer.Open();
 
         _cpuMonitor = new CpuMonitor(_computer, cpuTdp);
-        _gpuMonitor = new GpuMonitor(_computer);
+        _gpuMonitor = new GpuMonitor(_computer, gpuTdp);
         _peripheralEstimator = new PeripheralPowerEstimator();
         _processMonitor = new ProcessMonitor(cpuTdp, enableProcessMonitoring);
 
@@ -63,25 +80,27 @@ public sealed class MonitoringService : IDisposable
         {
             while (await _timer.WaitForNextTickAsync(_cts.Token))
             {
+                if (_isPaused) continue;
+
                 try
                 {
                     var cpu = _cpuMonitor.ReadSensors();
                     var gpuReadings = _gpuMonitor.ReadSensors();
                     var topProcesses = _processMonitor.LatestResults;
 
-                    var (moduleReadings, extraPower, batteryDischarge) = ReadModuleBreakdown();
+                    var (moduleReadings, extraPower, batteryDischarge, baseline) = ReadModuleBreakdown();
                     var dgpuSum = gpuReadings.Where(g => !g.IsIntegrated).Sum(g => g.PowerWatts);
                     var systemTotal = batteryDischarge > 0
                         ? batteryDischarge
                         : cpu.PackagePowerWatts + dgpuSum
                             + extraPower
-                            + _baselinePower;
+                            + baseline;
 
                     if (_powerLogCount < 5)
                     {
                         Console.WriteLine(
                             $"[Power] CPU={cpu.PackagePowerWatts:F1}W dGPU={dgpuSum:F1}W " +
-                            $"modules={extraPower:F1}W bat={batteryDischarge:F1}W baseline={_baselinePower}W " +
+                            $"modules={extraPower:F1}W bat={batteryDischarge:F1}W baseline={baseline:F1}W " +
                             $"total={systemTotal:F1}W");
                         _powerLogCount++;
                     }
@@ -114,7 +133,7 @@ public sealed class MonitoringService : IDisposable
         }
     }
 
-    private (PowerModuleReading[] moduleReadings, double extraPower, double batteryDischarge) ReadModuleBreakdown()
+    private (PowerModuleReading[] moduleReadings, double extraPower, double batteryDischarge, double baselinePower) ReadModuleBreakdown()
     {
         var moduleTotals = new Dictionary<string, (double watts, int count)>();
         double batteryDischarge = 0;
@@ -209,7 +228,15 @@ public sealed class MonitoringService : IDisposable
 
         var moduleArray = moduleReadings.ToArray();
         var extra = moduleArray.Sum(x => x.EstimatedPowerWatts);
-        return (moduleArray, extra, batteryDischarge);
+
+        // 动态基线：扣除已有真实传感器覆盖的组件预留值，避免双重计算
+        var realCategories = moduleTotals.Keys.Where(k => !k.EndsWith("(估算)")).ToHashSet();
+        double deduction = 0;
+        foreach (var cat in realCategories)
+            if (BaselineAllowanceByCategory.TryGetValue(cat, out var v)) deduction += v;
+        var adjustedBaseline = Math.Max(BaselineFloor, BaseSystemOverhead - deduction);
+
+        return (moduleArray, extra, batteryDischarge, adjustedBaseline);
     }
 
     private static string GetModuleName(LibreHardwareMonitor.Hardware.HardwareType hardwareType)

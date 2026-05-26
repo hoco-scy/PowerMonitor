@@ -12,6 +12,7 @@ public partial class MainViewModel : ObservableObject
 {
     private readonly MonitoringService _service;
     private readonly DateTime _startTime = DateTime.Now;
+    private MainWindow? _mainWindow;
 
     // CPU
     [ObservableProperty] private double _cpuPower;
@@ -54,8 +55,18 @@ public partial class MainViewModel : ObservableObject
         service.DataUpdated += OnDataUpdated;
     }
 
+    internal void SetMainWindow(MainWindow window) => _mainWindow = window;
+
+    internal void OnDragStateChanged(bool isDragging)
+    {
+        _service.IsPaused = isDragging;
+    }
+
     private void OnDataUpdated(MonitoringSnapshot snapshot)
     {
+        // 在投递前检查，避免拖拽时向 Dispatcher 队列投递消息
+        if (_mainWindow?.IsDragging == true) return;
+
         Application.Current.Dispatcher.BeginInvoke(() =>
         {
             var p = snapshot.Power;
@@ -90,12 +101,16 @@ public partial class MainViewModel : ObservableObject
             SystemTotalText = p.SystemTotalPowerWatts.ToString("F1");
             ModulePowers = p.ModuleReadings;
 
-            // History
-            CpuPowerHistory.Add(p.CpuPackagePowerWatts);
-            if (CpuPowerHistory.Count > MaxHistoryLength) CpuPowerHistory.RemoveAt(0);
-            SystemPowerHistory.Add(p.SystemTotalPowerWatts);
-            if (SystemPowerHistory.Count > MaxHistoryLength) SystemPowerHistory.RemoveAt(0);
-            CpuHistoryMax = Math.Max(50, CpuPowerHistory.Max() * 1.3);
+            // History — 创建新列表以触发 DependencyProperty 变更回调
+            var cpuHist = new List<double>(CpuPowerHistory) { p.CpuPackagePowerWatts };
+            if (cpuHist.Count > MaxHistoryLength) cpuHist.RemoveAt(0);
+            CpuPowerHistory = cpuHist;
+
+            var sysHist = new List<double>(SystemPowerHistory) { p.SystemTotalPowerWatts };
+            if (sysHist.Count > MaxHistoryLength) sysHist.RemoveAt(0);
+            SystemPowerHistory = sysHist;
+
+            CpuHistoryMax = Math.Max(50, cpuHist.Max() * 1.3);
 
             // Processes
             TopProcesses = snapshot.TopProcesses;
